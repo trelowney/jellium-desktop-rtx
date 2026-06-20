@@ -334,7 +334,24 @@
 
         togglePictureInPicture() {}
         toggleAirPlay() {}
-        getStats() { return Promise.resolve({ categories: [] }); }
+        getStats() {
+            const categories = [];
+            // Windows + RTX: surface VSR/HDR status in the Playback Info panel,
+            // each on its own row. Reads the boot-time settings, which is the
+            // state actually applied (the d3d11vpp filter is set at mpv start).
+            if (navigator.platform.startsWith('Win')) {
+                const pb = (window.jmpInfo && window.jmpInfo.settings && window.jmpInfo.settings.playback) || {};
+                const state = (on) => on ? 'On (applied)' : 'Off';
+                categories.push({
+                    name: 'RTX Video Enhancement',
+                    stats: [
+                        { label: 'RTX Video Super Resolution', value: state(!!pb.rtxVsr) },
+                        { label: 'RTX Video HDR', value: state(!!pb.rtxHdr) }
+                    ]
+                });
+            }
+            return Promise.resolve({ categories });
+        }
         getSupportedAspectRatios() {
             return [
                 { id: 'auto',  name: this.globalize.translate('Auto') },
