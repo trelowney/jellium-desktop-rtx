@@ -228,6 +228,11 @@ fn apply_rtx_video(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<(
     // backends can't feed it, so force D3D11 hardware decoding.
     set("hwdec", "d3d11va")?;
 
+    // Keep the whole chain (decode -> d3d11vpp -> output) on the D3D11 GPU API.
+    // On any other gpu-api the frames get copied off the NVIDIA D3D11 path and
+    // the RTX VSR/HDR extension never engages, so pin it explicitly.
+    set("gpu-api", "d3d11")?;
+
     let mut parts: Vec<String> = Vec::new();
     if boot.rtx_vsr {
         parts.push("scaling-mode=nvidia".into());

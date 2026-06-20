@@ -91,6 +91,7 @@ jobs:
         with:
           files: dist/JellyfinDesktop-*.zip
           fail_on_unmatched_files: true
+          body_path: CHANGELOG.md
 
   # Clean up after ourselves: the build creates Actions caches (CEF ~hundreds
   # of MB + MSYS2 packages) that otherwise linger against the repo cache quota.

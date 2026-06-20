@@ -563,7 +563,7 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
         "__SETTINGS_JSON__",
         &jfn_config::cli_json(jfn_mpv::hwdec_options()),
     );
-    replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION);
+    replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION_FULL);
     replace_first(
         &mut code,
         "__THEME_COLOR_SUPPORTED__",

@@ -1,5 +1,10 @@
 use std::path::PathBuf;
 
+/// Upstream jellyfin-desktop commit this RTX fork is currently based on.
+/// Bump this whenever the fork is re-synced onto a newer upstream version, so
+/// the in-app version keeps showing which original build it was made from.
+const UPSTREAM_BASE: &str = "676919e";
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest_dir
@@ -27,13 +32,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => git_info(repo_root),
     };
-    let version_full = if !version.contains('-') || git_hash.is_empty() {
-        version.to_string()
+    let fork = if git_hash.is_empty() {
+        "local".to_string()
     } else if dirty {
-        format!("{version}+{git_hash}-dirty")
+        format!("{git_hash}-dirty")
     } else {
-        format!("{version}+{git_hash}")
+        git_hash.clone()
     };
+    let build_date = build_date();
+    println!("cargo:rustc-env=JFN_BUILD_DATE={build_date}");
+    // Shown in the app (About / Playback info). Encodes: this is the RTX fork,
+    // the build date + fork commit, and which upstream jellyfin-desktop version
+    // and commit it was built from.
+    let version_full =
+        format!("RTX build {build_date} ({fork}) · base jellyfin-desktop {version}@{UPSTREAM_BASE}");
     println!("cargo:rustc-env=JFN_APP_VERSION_FULL={version_full}");
     track_git_refs(repo_root);
 
@@ -57,6 +69,27 @@ fn git_info(repo_root: &std::path::Path) -> (String, bool) {
         .unwrap_or_default();
     let dirty = repo.is_dirty().unwrap_or(false);
     (hash, dirty)
+}
+
+/// UTC build date as `YYYY-MM-DD`, with no external crates. Captured when this
+/// script runs (a fresh CI checkout always reruns it, so it reflects the build).
+fn build_date() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    // civil_from_days (Howard Hinnant): days since 1970-01-01 -> Y/M/D.
+    let z = secs / 86_400 + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
 }
 
 /// Re-run when HEAD moves. git_dir holds HEAD; common_dir holds refs/packed-refs
