@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-06-21
+
+### Fixed
+- **Server connection failure**: the app version contained a non-ASCII character that was sent in the auth/HTTP headers, which the server rejected — every request (including the connectivity check) failed. The version string is now ASCII-only. Note: the browser login session isn't carried over to this build's separate data dir, so you'll sign in once (the server address is migrated for you).
+
 ## 2026-06-20
 
 First RTX build. Based on upstream jellyfin-desktop `3.0.0-dev@676919e`.
