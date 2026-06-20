@@ -91,3 +91,24 @@ jobs:
         with:
           files: dist/JellyfinDesktop-*.zip
           fail_on_unmatched_files: true
+
+  # Clean up after ourselves: the build creates Actions caches (CEF ~hundreds
+  # of MB + MSYS2 packages) that otherwise linger against the repo cache quota.
+  # Runs on a cheap Linux runner regardless of build outcome and deletes them.
+  cleanup-cache:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete all Actions caches for this repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          ids=$(gh api "repos/$REPO/actions/caches" --paginate --jq '.actions_caches[].id')
+          if [ -z "$ids" ]; then echo "No caches to delete."; exit 0; fi
+          for id in $ids; do
+            gh api --method DELETE "repos/$REPO/actions/caches/$id" && echo "deleted cache $id"
+          done
