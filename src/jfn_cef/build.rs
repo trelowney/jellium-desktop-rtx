@@ -44,8 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Shown in the app (About / Playback info). Encodes: this is the RTX fork,
     // the build date + fork commit, and which upstream jellyfin-desktop version
     // and commit it was built from.
+    // ASCII-only: this string is reported to the server in the auth header and
+    // used as a User-Agent, and a non-ASCII byte there breaks the HTTP request
+    // (it caused "Connection Failure"). Keep punctuation plain.
     let version_full =
-        format!("RTX build {build_date} ({fork}) · base jellyfin-desktop {version}@{UPSTREAM_BASE}");
+        format!("RTX build {build_date} ({fork}) - base jellyfin-desktop {version}@{UPSTREAM_BASE}");
     println!("cargo:rustc-env=JFN_APP_VERSION_FULL={version_full}");
     track_git_refs(repo_root);
 
