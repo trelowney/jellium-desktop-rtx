@@ -596,6 +596,9 @@ pub fn jfn_app_main() -> c_int {
         jfn_paths::set_cache_dir_override(path.into());
     }
 
+    // One-time: inherit settings from an existing upstream jellyfin-desktop
+    // install (this build keeps a separate data dir), before init/load.
+    jfn_paths::migrate_legacy_config();
     let settings_path = jfn_paths::config_dir().join("settings.json");
     jfn_config::settings_init(&settings_path);
     jfn_config::settings_load();

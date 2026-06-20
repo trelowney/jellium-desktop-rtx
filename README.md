@@ -1,60 +1,48 @@
-# Jellyfin Desktop
+# Jellyfin Desktop RTX
 
-> [!WARNING]
-> This client is still under active development and may have bugs or missing features.
+A personal fork of [**jellyfin/jellyfin-desktop**](https://github.com/jellyfin/jellyfin-desktop) (the CEF + mpv desktop client) that adds **NVIDIA RTX video enhancement** for playback.
 
-A [Jellyfin](https://jellyfin.org) desktop client built on [CEF](https://github.com/chromiumembedded/cef) and [mpv](https://mpv.io/). A complete rewrite of the previous [Qt-based client](https://github.com/jellyfin-archive/jellyfin-desktop-qt/).
+> [!NOTE]
+> Unofficial fork for personal use. For the official, multi-platform client use
+> [jellyfin/jellyfin-desktop](https://github.com/jellyfin/jellyfin-desktop).
 
-## Downloads
-### Linux
-- AppImage
-  - [x86_64](https://nightly.link/jellyfin/jellyfin-desktop/workflows/build-linux-appimage/main/linux-appimage-x86_64.zip)
-  - [aarch64](https://nightly.link/jellyfin/jellyfin-desktop/workflows/build-linux-appimage/main/linux-appimage-aarch64.zip)
-- Arch Linux (AUR): [jellyfin-desktop-git](https://aur.archlinux.org/packages/jellyfin-desktop-git)
-- [Flatpak (non-Flathub bundle)](https://nightly.link/jellyfin/jellyfin-desktop/workflows/build-linux-flatpak/main/linux-flatpak-x86_64.zip)
+## What's different from upstream
 
-### macOS
-- [Apple Silicon](https://nightly.link/jellyfin/jellyfin-desktop/workflows/build-macos/main/macos-arm64.zip)
-- [Intel](https://nightly.link/jellyfin/jellyfin-desktop/workflows/build-macos/main/macos-x86_64.zip)
+- **NVIDIA RTX Video Super Resolution (VSR)** — AI upscaling / detail enhancement during playback.
+- **NVIDIA RTX Video HDR** — AI SDR→HDR conversion.
+  - Both are driven through mpv's `d3d11vpp` filter and are **toggleable in the client settings** (see below). Enabling either forces `hwdec=d3d11va` + `gpu-api=d3d11` so the RTX path actually engages.
+- **Playback Info shows RTX status** — RTX VSR and RTX HDR are reported separately, so you can see whether each is applied.
+- **Separate data directory** — stores settings/cache/logs under `jellyfin-desktop-rtx`, so it won't clash with an installed stock jellyfin-desktop. On first run it **migrates settings from the stock install** (if present), so you don't have to log in / reconfigure.
+- **Distinct branding** — green icon and "Jellyfin Desktop RTX" title, so it's obvious which build is running.
+- **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-06-20 (<commit>) · base jellyfin-desktop 3.0.0-dev@676919e`, so you always know the build date and which upstream commit it was made from.
 
-After installing, remove quarantine: 
-```
-sudo xattr -cr /Applications/Jellyfin\ Desktop.app
-```
+## Requirements
 
-### Windows
-- [x64](https://nightly.link/jellyfin/jellyfin-desktop/workflows/build-windows/main/windows-x64.zip)
-- [arm64](https://nightly.link/jellyfin/jellyfin-desktop/workflows/build-windows/main/windows-arm64.zip)
+- **Windows x64** — RTX VSR/HDR use DirectX 11 video processing; this fork ships a **Windows-only** build.
+- **NVIDIA RTX 20-series or newer GPU** (Tensor cores) with a current driver.
+- For **RTX HDR**: an HDR display with **Windows HDR turned on** (`Win`+`Alt`+`B`). On an SDR display the HDR conversion has no visible effect.
 
+## Download
 
-## Development
+Grab the latest **`JellyfinDesktop-*-windows-x64.zip`** from the [**Releases**](../../releases) page, unzip it anywhere, and run `jellyfin-desktop.exe`.
 
-This project uses [just](https://github.com/casey/just) as a command runner.
+## Enabling RTX
 
-```
-Available recipes:
-    [package]
-    appimage ...    # [linux] build AppImage
-    flatpak ...     # [linux] build Flatpak bundle
-    dmg             # [macos] build Apple Disk Image (.dmg)
+1. Open the app and connect to your server.
+2. Go to **client settings → Playback**.
+3. Enable **RTX Video Super Resolution** and/or **RTX Video HDR**.
+4. **Fully restart the app** — the filter is applied when mpv starts, so a restart is required.
+5. Play a video, then open **Playback Info** to confirm each is applied.
 
-    [maintenance]
-    clean         # Remove build artifacts
+## Building
 
-    [test]
-    test          # Run tests
+Builds run on GitHub Actions (Windows x64) and publish a Release: push a version
+tag (`v*`) — or run the `build-windows` workflow manually — and the resulting zip
+is attached to the Release. Release notes come from [`CHANGELOG.md`](CHANGELOG.md).
+See the upstream repo for local build instructions.
 
-    [lint]
-    fmt           # Format workspace
-    fmt-check     # Check formatting
-    clippy        # Run clippy
-    lint          # Lint workspace
-    strict-lint   # Strict lint workspace
+## Credits / license
 
-    [build]
-    build         # Build the app
-
-    [run]
-    run *args     # Run the app
-    run-mpv *args # Run the mpv CLI
-```
+Based on [jellyfin/jellyfin-desktop](https://github.com/jellyfin/jellyfin-desktop)
+and licensed under the same terms (GPLv2). All credit for the client itself goes
+to the Jellyfin project; this fork only adds the RTX integration described above.

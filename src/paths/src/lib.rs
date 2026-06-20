@@ -15,7 +15,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-const APP_DIR_NAME: &str = "jellyfin-desktop";
+// Separate data dir from upstream jellyfin-desktop so the two installs don't
+// share config: the upstream app rewrites settings.json without the RTX keys,
+// which would silently disable RTX in this build. Keeping a distinct dir lets
+// both run side by side with independent settings, cache, logs and device id.
+const APP_DIR_NAME: &str = "jellyfin-desktop-rtx";
 const LOG_FILE_NAME: &str = "jellyfin-desktop.log";
 
 #[derive(Default)]
@@ -100,6 +104,31 @@ pub fn cache_dir() -> PathBuf {
         return ensure(path);
     }
     ensure(imp::cache_base().join(APP_DIR_NAME))
+}
+
+/// One-time settings migration from an existing upstream `jellyfin-desktop`
+/// install. This build uses a separate data dir ([`APP_DIR_NAME`]); on first run
+/// it has no settings yet. If the upstream install does, copy its `settings.json`
+/// and device `instance.json` over so the user keeps their server login and
+/// preferences instead of reconfiguring. No-op when our settings already exist,
+/// when a config override is set, or when there's nothing to copy.
+pub fn migrate_legacy_config() {
+    // A custom config override opts out — only the default location migrates.
+    if config_override().is_some() {
+        return;
+    }
+    let legacy = imp::config_base().join("jellyfin-desktop");
+    let dst = config_dir();
+    if legacy == dst {
+        return;
+    }
+    for name in ["settings.json", "instance.json"] {
+        let dstf = dst.join(name);
+        let srcf = legacy.join(name);
+        if !dstf.exists() && srcf.exists() {
+            let _ = fs::copy(&srcf, &dstf);
+        }
+    }
 }
 
 pub fn log_dir() -> PathBuf {

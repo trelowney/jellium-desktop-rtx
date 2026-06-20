@@ -311,6 +311,22 @@
                 if (callback) callback(playerState.duration);
                 return playerState.duration;
             },
+            // Feeds the Playback Info panel. Reports RTX VSR and RTX HDR
+            // separately, reading the boot-time settings (which is the state
+            // actually applied, since the d3d11vpp filter is set when mpv
+            // starts). Windows-only; returns nothing elsewhere.
+            getStats() {
+                if (!navigator.platform.startsWith('Win')) return Promise.resolve([]);
+                const pb = (jmpInfo.settings && jmpInfo.settings.playback) || {};
+                const state = (on) => on ? 'On (applied)' : 'Off';
+                return Promise.resolve([{
+                    type: 'video',
+                    stats: [
+                        { label: 'RTX Video Super Resolution', value: state(!!pb.rtxVsr) },
+                        { label: 'RTX Video HDR', value: state(!!pb.rtxHdr) }
+                    ]
+                }]);
+            },
         },
         system: {
             openExternalUrl(url) {
