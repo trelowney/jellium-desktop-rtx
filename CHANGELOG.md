@@ -9,6 +9,10 @@ published from the matching section below.
 - **Server connection failure**: the app version contained a non-ASCII character that was sent in the auth/HTTP headers, which the server rejected — every request (including the connectivity check) failed. The version string is now ASCII-only. Note: the browser login session isn't carried over to this build's separate data dir, so you'll sign in once (the server address is migrated for you).
 - **Playback Info RTX status** now actually shows: the indicator was wired into the wrong player object/format and never appeared. It's now reported by the real mpv player's `getStats()` as an "RTX Video Enhancement" category with RTX VSR and RTX HDR on separate rows.
 
+### Changed
+- **Playback Info RTX status is now truthful**, not just the setting: it reflects mpv's real d3d11vpp outcome — **Active** (confirmed), **Failed (GPU rejected)** / **Unsupported** (mpv reported a problem), **On** (enabled and applied, no error), or **Off**. (A confirmed "Active" requires verbose logging, since mpv only logs success at verbose; failures are always surfaced.)
+- CI builds/releases purely from `v*` tag pushes now; removed the unused non-Windows workflows and the flaky `workflow_dispatch` path that once ran on `main` and skipped the release.
+
 ## 2026-06-20
 
 First RTX build. Based on upstream jellyfin-desktop `3.0.0-dev@676919e`.

@@ -420,6 +420,29 @@ pub fn jfn_playback_stop_mpv_event_thread() {
     }
 }
 
+/// Surface mpv's d3d11vpp RTX outcome to the web UI (Playback Info). mpv logs
+/// success at verbose and failure at warn, so forward whichever level arrives.
+/// Pushed over the same exec_js bridge used for other native->web updates;
+/// the JS side stashes it for the player's getStats().
+fn report_rtx_status_from_log(text: &str) {
+    let push = |feature: &str, state: &str| {
+        crate::exec_js::call(&format!(
+            "window._nativeRtxStatus&&window._nativeRtxStatus('{feature}','{state}')"
+        ));
+    };
+    if text.contains("NVIDIA RTX Super Resolution enabled") {
+        push("vsr", "active");
+    } else if text.contains("Failed to enable NVIDIA RTX Super Resolution") {
+        push("vsr", "failed");
+    } else if text.contains("NVIDIA RTX Video HDR enabled") {
+        push("hdr", "active");
+    } else if text.contains("NVIDIA RTX Video HDR not supported") {
+        push("hdr", "unsupported");
+    } else if text.contains("Failed to enable NVIDIA RTX Video HDR") {
+        push("hdr", "failed");
+    }
+}
+
 fn event_loop(handle_addr: usize, stop: std::sync::Arc<AtomicBool>) {
     let handle = handle_addr as *mut mpv_sys::mpv_handle;
     loop {
@@ -432,6 +455,7 @@ fn event_loop(handle_addr: usize, stop: std::sync::Arc<AtomicBool>) {
             Event::None => continue,
             Event::LogMessage(ref m) => {
                 jfn_mpv::forward_log_to_tracing(m);
+                report_rtx_status_from_log(&m.text);
                 continue;
             }
             Event::PropertyChange { id, ref value, .. } => {

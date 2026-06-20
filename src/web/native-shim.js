@@ -388,6 +388,12 @@
         console.debug('[Media] _nativeSeek:', positionMs);
         window.api.input.positionSeek(positionMs);
     };
+    // RTX d3d11vpp runtime outcome from mpv (per feature: 'active' | 'failed' |
+    // 'unsupported'). Stashed for the player's getStats() -> Playback Info panel.
+    window._nativeRtxStatus = function(feature, state) {
+        window.__rtxStatus = window.__rtxStatus || {};
+        window.__rtxStatus[feature] = state;
+    };
 
     // window.NativeShell - app info and plugins
     const plugins = ['mpvVideoPlayer', 'mpvAudioPlayer', 'inputPlugin'];
