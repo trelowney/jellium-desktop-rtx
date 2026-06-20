@@ -53,6 +53,8 @@ pub(crate) fn js_cstr_or_warn(label: &str, s: &str) -> Option<CString> {
 pub(crate) fn apply_setting_value(_section: &str, key: &str, value: &str) {
     match key {
         "hwdec" => jfn_config::set_hwdec(value),
+        "rtxVsr" => jfn_config::set_rtx_vsr(value == "true"),
+        "rtxHdr" => jfn_config::set_rtx_hdr(value == "true"),
         "audioPassthrough" => jfn_config::set_audio_passthrough(value),
         "audioExclusive" => jfn_config::set_audio_exclusive(value == "true"),
         "audioChannels" => jfn_config::set_audio_channels(value),

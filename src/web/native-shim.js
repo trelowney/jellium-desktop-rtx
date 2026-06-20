@@ -91,7 +91,9 @@
         settings: {
             main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
             playback: {
-                hwdec: _savedSettings.hwdec || 'auto'
+                hwdec: _savedSettings.hwdec || 'auto',
+                rtxVsr: !!_savedSettings.rtxVsr,
+                rtxHdr: !!_savedSettings.rtxHdr
             },
             audio: {
                 audioPassthrough: _savedSettings.audioPassthrough || '',
@@ -141,6 +143,23 @@
         settingsUpdate: [],
         settingsDescriptionsUpdate: []
     };
+
+    // Windows + NVIDIA RTX only: AI video enhancement via mpv's d3d11vpp filter.
+    // Hidden elsewhere because the filter only exists on the Windows mpv build.
+    if (navigator.platform.startsWith('Win')) {
+        jmpInfo.settingsDescriptions.playback.push(
+            {
+                key: 'rtxVsr',
+                displayName: 'RTX Video Super Resolution',
+                help: 'NVIDIA RTX AI upscaling and detail enhancement. Requires an RTX 20-series or newer GPU. Forces D3D11 hardware decoding. Requires restart.'
+            },
+            {
+                key: 'rtxHdr',
+                displayName: 'RTX Video HDR',
+                help: 'NVIDIA RTX AI SDR-to-HDR conversion. Requires an RTX 20-series or newer GPU and an HDR display set to HDR mode. Forces D3D11 hardware decoding. Requires restart.'
+            }
+        );
+    }
 
     // macOS-only: transparent titlebar toggle (shown first in Advanced section)
     if (navigator.platform.startsWith('Mac')) {

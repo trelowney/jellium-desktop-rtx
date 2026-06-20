@@ -60,6 +60,12 @@ pub struct JfnMpvBoot {
     /// the app's own client-side decorations don't stack under a compositor
     /// titlebar (e.g. KDE). No effect on X11 (WM draws decorations).
     pub client_side_decorations: bool,
+    /// Windows + NVIDIA RTX: enable RTX Video Super Resolution (AI upscale via
+    /// the `d3d11vpp` filter). Forces `hwdec=d3d11va`. Ignored off Windows.
+    pub rtx_vsr: bool,
+    /// Windows + NVIDIA RTX: enable RTX Video HDR (SDR->HDR via the `d3d11vpp`
+    /// filter). Forces `hwdec=d3d11va`. Ignored off Windows.
+    pub rtx_hdr: bool,
 }
 
 /// Owns the Handle for the rest of the process. `mpv_terminate_destroy`
@@ -150,7 +156,7 @@ fn apply_defaults(
     // (e.g. KDE) would stack on top of ours.
     let suppress_ssd = display == DisplayBackend::Wayland && client_side_decorations;
     set("border", if suppress_ssd { "no" } else { "yes" })?;
-    set("title", "Jellyfin Desktop")?;
+    set("title", "Jellyfin Desktop RTX")?;
     set("wayland-app-id", "org.jellyfin.JellyfinDesktop")?;
 
     // Keep window open when idle. `force-window=yes` (not "immediate")
@@ -201,6 +207,56 @@ fn apply_boot_options(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Resul
         && !ch.is_empty()
     {
         set("audio-channels", &ch)?;
+    }
+    // Applied last so it can override hwdec when RTX enhancement is enabled.
+    apply_rtx_video(handle, boot)?;
+    Ok(())
+}
+
+/// Windows + NVIDIA RTX video enhancement via mpv's `d3d11vpp` filter:
+/// RTX Video Super Resolution (AI upscaling) and/or RTX Video HDR (SDR->HDR).
+/// Both consume D3D11 textures, so this overrides `hwdec` to `d3d11va`.
+/// Requires an RTX 20-series or newer GPU and a Windows mpv build.
+#[cfg(target_os = "windows")]
+fn apply_rtx_video(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<()> {
+    if !(boot.rtx_vsr || boot.rtx_hdr) {
+        return Ok(());
+    }
+    let set = |name: &str, value: &str| set_option_or_skip(handle, name, value);
+
+    // The d3d11vpp filter only operates on D3D11 frames; software/other hwdec
+    // backends can't feed it, so force D3D11 hardware decoding.
+    set("hwdec", "d3d11va")?;
+
+    let mut parts: Vec<String> = Vec::new();
+    if boot.rtx_vsr {
+        parts.push("scaling-mode=nvidia".into());
+        // Fixed 2x upscale (ideal for 1080p->4K); mpv downscales to the display
+        // afterwards. Dynamic display-matched scaling is a possible follow-up.
+        parts.push("scale=2".into());
+    }
+    if boot.rtx_hdr {
+        // A 10-bit output format is required for the true-HDR conversion.
+        parts.push("format=x2bgr10".into());
+        parts.push("nvidia-true-hdr".into());
+    }
+    let vf = format!("d3d11vpp={}", parts.join(":"));
+    set("vf", &vf)?;
+
+    if boot.rtx_hdr {
+        // Tell the display/compositor to switch to HDR for the HDR10 output.
+        set("target-colorspace-hint", "yes")?;
+    }
+
+    tracing::info!(target: "mpv", "RTX video enhancement enabled (vf={})", vf);
+    Ok(())
+}
+
+/// Off Windows the `d3d11vpp` filter does not exist; RTX VSR/HDR is a no-op.
+#[cfg(not(target_os = "windows"))]
+fn apply_rtx_video(_handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<()> {
+    if boot.rtx_vsr || boot.rtx_hdr {
+        tracing::warn!(target: "mpv", "RTX VSR/HDR requested but only supported on Windows; ignoring");
     }
     Ok(())
 }

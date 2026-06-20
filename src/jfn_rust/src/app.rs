@@ -143,6 +143,8 @@ struct StartupOptions {
     log_level: String,
     log_file: Option<String>,
     disable_gpu_compositing: bool,
+    rtx_vsr: bool,
+    rtx_hdr: bool,
     remote_debugging_port: c_int,
 }
 
@@ -152,6 +154,8 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
     let saved_chans = jfn_config::audio_channels();
     let saved_log_level = jfn_config::log_level();
     let saved_audio_exclusive = jfn_config::audio_exclusive();
+    let rtx_vsr = jfn_config::rtx_vsr();
+    let rtx_hdr = jfn_config::rtx_hdr();
 
     let mpv_hwdec_default = jfn_mpv::HWDEC_DEFAULT.to_string();
 
@@ -207,6 +211,8 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
         log_level,
         log_file,
         disable_gpu_compositing,
+        rtx_vsr,
+        rtx_hdr,
         remote_debugging_port,
     }
 }
@@ -221,6 +227,8 @@ struct MpvInitOptions<'a> {
     audio_exclusive: bool,
     audio_channels: &'a str,
     mpv_log_level: &'a str,
+    rtx_vsr: bool,
+    rtx_hdr: bool,
 }
 
 fn init_mpv_handle(opts: MpvInitOptions<'_>) -> *mut jfn_mpv::sys::mpv_handle {
@@ -250,6 +258,8 @@ fn init_mpv_handle(opts: MpvInitOptions<'_>) -> *mut jfn_mpv::sys::mpv_handle {
         window_maximized_at_boot: opts.boot_window_max,
         mpv_log_level: mpv_log_level_c.as_ptr(),
         client_side_decorations: jfn_config::client_side_decorations(),
+        rtx_vsr: opts.rtx_vsr,
+        rtx_hdr: opts.rtx_hdr,
     };
     unsafe { jfn_mpv::boot::jfn_mpv_handle_init(&boot as *const _) }
 }
@@ -624,6 +634,8 @@ pub fn jfn_app_main() -> c_int {
         audio_exclusive: opts.audio_exclusive,
         audio_channels: &opts.audio_channels,
         mpv_log_level,
+        rtx_vsr: opts.rtx_vsr,
+        rtx_hdr: opts.rtx_hdr,
     });
     if raw.is_null() {
         tracing::error!(target: "Main", "mpv handle init failed");
