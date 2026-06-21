@@ -88,13 +88,35 @@ jobs:
 
       # No upload-artifact: artifacts count toward Actions storage. The Release
       # asset below is free storage and is the only download we need.
+      # Release notes = only this version's CHANGELOG section, not the whole file.
+      # Tag vYYYY.MM.DD[.N] -> heading "## YYYY-MM-DD[.N]" (date groups dashed,
+      # the optional .N suffix keeps its dot). Falls back to the full changelog
+      # if no matching section is found.
+      - name: Extract release notes for this tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          header=$(echo "$ver" | sed -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+)/\1-\2-\3/')
+          awk -v h="## $header" '
+            $0==h {f=1; next}
+            /^## / && f {exit}
+            f {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "warning: no changelog section for '## $header'; using full changelog" >&2
+            cp CHANGELOG.md RELEASE_NOTES.md
+          fi
+          echo "----- release notes for $GITHUB_REF_NAME -----"
+          cat RELEASE_NOTES.md
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/JellyfinDesktop-*.zip
           fail_on_unmatched_files: true
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
 
   # Clean up after ourselves: the build creates Actions caches (CEF ~hundreds
   # of MB + MSYS2 packages) that otherwise linger against the repo cache quota.
