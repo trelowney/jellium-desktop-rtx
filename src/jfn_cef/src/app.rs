@@ -564,6 +564,7 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
         &jfn_config::cli_json(jfn_mpv::hwdec_options()),
     );
     replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION_FULL);
+    replace_first(&mut code, "__APP_RELEASE_TAG__", crate::APP_RELEASE_TAG);
     replace_first(
         &mut code,
         "__THEME_COLOR_SUPPORTED__",

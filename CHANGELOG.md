@@ -3,6 +3,14 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-06-21.1
+
+### Added
+- **In-app updater**: on startup the app checks GitHub for a newer release and, if found, shows a modal with the changelog and an **Update now** button. Clicking it downloads the release, closes the app, replaces the install in place, and relaunches — no manual steps. (Windows; this build is the first that can detect future updates.)
+
+### Changed
+- **Playback Info RTX status is now truthful** (real mpv outcome), confirmed working on RTX hardware: shows **Active** when mpv accepts the d3d11vpp filter, **Unsupported** if the GPU/driver rejects it, or **Off**. RTX HDR active is detected reliably; the mpv log subscription is auto-raised to verbose while RTX is on so VSR can also confirm **Active** without changing your log level.
+
 ## 2026-06-21
 
 ### Fixed
