@@ -349,6 +349,35 @@
             });
             group.appendChild(btn);
         }
+
+        // About / Updates
+        {
+            const group = document.createElement('div');
+            group.className = 'verticalSection';
+            form.appendChild(group);
+
+            const sectionHeader = document.createElement('h2');
+            sectionHeader.className = 'sectionTitle';
+            sectionHeader.textContent = 'About';
+            group.appendChild(sectionHeader);
+
+            const ver = document.createElement('div');
+            ver.className = 'fieldDescription';
+            ver.style.marginBottom = '0.6em';
+            ver.textContent = 'Version: ' + (jmpInfo.version || 'unknown');
+            group.appendChild(ver);
+
+            const btn = document.createElement('button');
+            btn.className = 'raised button-cancel block emby-button';
+            btn.textContent = 'Check for updates';
+            btn.type = 'button';
+            btn.addEventListener('click', () => {
+                if (typeof window.__rtxCheckForUpdates === 'function') {
+                    window.__rtxCheckForUpdates(true);
+                }
+            });
+            group.appendChild(btn);
+        }
     }
 
     window._openClientSettings = showSettingsPage;

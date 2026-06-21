@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-06-21.2
+
+### Added
+- **About / Updates section in client settings**: shows the full version and a **Check for updates** button that runs the update check on demand (shows the update modal, or a "You're up to date" toast). More discoverable than the right-click About dialog.
+
 ## 2026-06-21.1
 
 ### Added

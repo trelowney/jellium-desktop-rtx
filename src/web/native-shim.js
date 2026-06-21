@@ -532,22 +532,25 @@
     });
 
     // ---- Self-update check (Windows) -------------------------------------
-    // On startup, ask GitHub for the latest release. If its date is newer than
-    // this build, show a modal with the changelog and an "Update now" button
-    // that hands the release zip URL to the native updater. Best-effort: any
-    // failure (offline, API down, parse error) is swallowed so it never blocks.
+    // Exposes window.__rtxCheckForUpdates(manual): asks GitHub for the latest
+    // release and, if its tag differs from the tag THIS build was released as,
+    // shows a modal with the changelog + "Update now" (hands the zip URL to the
+    // native updater). manual=true also surfaces "up to date"/errors as a toast;
+    // the automatic startup check stays silent. All failures are swallowed.
     (function() {
-        if (!navigator.platform.startsWith('Win')) return;
-        if (window.__rtxUpdateChecked) return;
-        window.__rtxUpdateChecked = true;
-
         const REPO = 'trelowney/jellyfin-desktop-rtx';
-        // Exact tag this build was released as (set by CI). Empty on local
-        // builds → no reliable identity to compare, so skip the check.
-        const current = jmpInfo.releaseTag || '';
         const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
-        function showModal(rel, zipUrl) {
+        function showToast(msg) {
+            const t = document.createElement('div');
+            t.textContent = msg;
+            t.style.cssText = 'position:fixed;left:50%;bottom:40px;transform:translateX(-50%);z-index:100000;background:#222;color:#eee;padding:10px 18px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.4);font-family:inherit;opacity:0;transition:opacity .2s';
+            document.body.appendChild(t);
+            requestAnimationFrame(() => { t.style.opacity = '1'; });
+            setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 3000);
+        }
+
+        function showModal(rel, zipUrl, current) {
             const back = document.createElement('div');
             back.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-family:inherit;';
             const body = esc(rel.body || '').trim() || 'No release notes.';
@@ -574,19 +577,43 @@
             };
         }
 
-        setTimeout(() => {
-            if (!current) return;
+        window.__rtxCheckForUpdates = function(manual) {
+            if (!navigator.platform.startsWith('Win')) {
+                if (manual) showToast('Updates are only available on the Windows build');
+                return;
+            }
+            const current = (window.jmpInfo && jmpInfo.releaseTag) || '';
+            if (!current) {
+                if (manual) showToast('Update checking is unavailable for this build');
+                return;
+            }
+            if (manual) showToast('Checking for updates…');
             fetch('https://api.github.com/repos/' + REPO + '/releases/latest', { headers: { 'Accept': 'application/vnd.github+json' } })
                 .then(r => r.ok ? r.json() : Promise.reject(r.status))
                 .then(rel => {
                     // Different tag than the one we were built from => newer release.
-                    if (!rel.tag_name || rel.tag_name === current) return;
+                    if (!rel.tag_name || rel.tag_name === current) {
+                        if (manual) showToast("You're up to date (" + current + ')');
+                        return;
+                    }
                     const asset = (rel.assets || []).find(a => /\.zip$/i.test(a.name));
-                    if (!asset) return;
-                    showModal(rel, asset.browser_download_url);
+                    if (!asset) {
+                        if (manual) showToast('Update found, but no downloadable file');
+                        return;
+                    }
+                    showModal(rel, asset.browser_download_url, current);
                 })
-                .catch(e => console.debug('[Media] update check skipped:', e));
-        }, 4000);
+                .catch(e => {
+                    console.debug('[Media] update check skipped:', e);
+                    if (manual) showToast('Update check failed');
+                });
+        };
+
+        // Automatic, silent check shortly after startup (once).
+        if (navigator.platform.startsWith('Win') && !window.__rtxUpdateChecked) {
+            window.__rtxUpdateChecked = true;
+            setTimeout(() => window.__rtxCheckForUpdates(false), 4000);
+        }
     })();
 
     console.debug('[Media] Native shim installed');
