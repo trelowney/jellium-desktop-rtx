@@ -412,8 +412,10 @@ fn handle_message(message: BrowserMessage) -> bool {
             true
         }
         "applyUpdate" => with_args(args, |a| {
-            // a[0] = release zip URL chosen by the web UI's update check.
-            crate::updater::apply_update(&list_string(a, 0));
+            // a[0] = release zip URL, a[1] = asset size in bytes (for the
+            // progress bar), a[2] = version tag (shown in the updater window).
+            let size = list_string(a, 1).parse::<u64>().unwrap_or(0);
+            crate::updater::apply_update(&list_string(a, 0), size, &list_string(a, 2));
         }),
         "openConfigDir" => {
             jfn_logging::log(

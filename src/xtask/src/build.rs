@@ -29,6 +29,10 @@ pub fn run(args: &BuildArgs) -> Result<()> {
         .arg("jellyfin-desktop")
         .arg("--manifest-path")
         .arg(&manifest);
+    // Windows also builds the standalone self-update side-car.
+    if cfg!(target_os = "windows") {
+        cmd.arg("--bin").arg("jellyfin-desktop-rtx-updater");
+    }
     if args.no_kde_palette {
         cmd.arg("--no-default-features");
     }
@@ -99,6 +103,12 @@ pub fn run(args: &BuildArgs) -> Result<()> {
     let bin_src = target_dir.join("release").join(bin_name);
     let bin_dst = out.join(bin_name);
     xfs::copy_file(&bin_src, &bin_dst)?;
+
+    // Stage the updater side-car next to the app (Windows only).
+    if cfg!(target_os = "windows") {
+        let updater = "jellyfin-desktop-rtx-updater.exe";
+        xfs::copy_file(&target_dir.join("release").join(updater), &out.join(updater))?;
+    }
 
     crate::platform::stage_cef(&out, &cef_info)?;
     crate::platform::stage_mpv(&out, &mpv_info, used_external_mpv, &bin_dst)?;
