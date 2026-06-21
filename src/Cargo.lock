@@ -2464,6 +2464,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jfn-updater"
+version = "3.0.0-dev"
+dependencies = [
+ "windows",
+ "zip",
+]
+
+[[package]]
 name = "jfn-wake-event"
 version = "3.0.0-dev"
 dependencies = [

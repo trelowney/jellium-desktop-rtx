@@ -19,6 +19,7 @@ members = [
     "paths",
     "platform_abi",
     "playback",
+    "updater",
     "wake_event",
     "wayland",
     "windows",

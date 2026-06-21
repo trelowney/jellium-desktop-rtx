@@ -1,0 +1,25 @@
+[package]
+name = "jfn-updater"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Standalone side-car updater shipped next to the app. Named distinctly so it's
+# obvious in Task Manager / the install dir what it is.
+[[bin]]
+name = "jellyfin-desktop-rtx-updater"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Same zip version the packager (xtask) uses, so no new lockfile resolution.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

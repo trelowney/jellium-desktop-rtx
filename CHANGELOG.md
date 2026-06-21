@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-06-21.4
+
+### Changed
+- **New self-updater that actually works and shows progress.** The old in-app updater handed off to a hidden background script that could be killed before it did anything (the app would just close and nothing happened). Replaced with a dedicated `jellyfin-desktop-rtx-updater.exe` side-car bundled next to the app: clicking **Update now** opens a small native window with a progress bar that waits for the app to close, downloads the release (live MB progress), verifies the archive, installs it over the app, and relaunches it. If anything fails, the existing install is left intact and the app is relaunched, with the window showing what went wrong. Pulls only from this fork's GitHub releases.
+
 ## 2026-06-21.3
 
 ### Added

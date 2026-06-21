@@ -550,7 +550,7 @@
             setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 3000);
         }
 
-        function showModal(rel, zipUrl, current) {
+        function showModal(rel, asset, current) {
             const back = document.createElement('div');
             back.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-family:inherit;';
             const body = esc(rel.body || '').trim() || 'No release notes.';
@@ -572,7 +572,8 @@
                 btn.disabled = true;
                 back.querySelector('#rtxUpdLater').disabled = true;
                 if (window.jmpNative && window.jmpNative.applyUpdate) {
-                    window.jmpNative.applyUpdate(zipUrl);
+                    // url, size (bytes, for the progress bar), version tag.
+                    window.jmpNative.applyUpdate(asset.browser_download_url, String(asset.size || 0), rel.tag_name || '');
                 }
             };
         }
@@ -601,7 +602,7 @@
                         if (manual) showToast('Update found, but no downloadable file');
                         return;
                     }
-                    showModal(rel, asset.browser_download_url, current);
+                    showModal(rel, asset, current);
                 })
                 .catch(e => {
                     console.debug('[Media] update check skipped:', e);
