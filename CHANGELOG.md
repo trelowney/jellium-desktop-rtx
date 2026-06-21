@@ -9,6 +9,9 @@ published from the matching section below.
 - **NVIDIA-GPU guard for RTX**: the app now checks at startup (via DXGI adapter enumeration) whether an NVIDIA GPU is actually present. If RTX VSR/HDR is enabled but no NVIDIA GPU is found — e.g. on a laptop whose NVIDIA dGPU is switched off, leaving only an AMD/Intel integrated GPU — it skips the RTX video path entirely instead of forcing the D3D11/HDR pipeline onto a GPU that can't do it, so playback keeps working unmodified. The check **fails open**: on any real NVIDIA system (or if the GPU can't be queried) RTX always engages, so this never weakens the working case. Playback Info correctly reports **Unsupported** when RTX is skipped this way.
 - **RTX always renders on the NVIDIA GPU (Optimus laptops)**: when an NVIDIA GPU is present, the app now pins mpv's D3D11 device to it (`--d3d11-adapter`, set to the detected adapter — no hardcoding). On a hybrid laptop whose desktop is composited by the integrated GPU, this makes the RTX path actually engage on the NVIDIA GPU instead of silently running on the iGPU. The dGPU wakes during RTX playback (expected on battery). Falls back to mpv's default adapter if pinning doesn't match.
 
+### Fixed
+- **Archive file dates**: files inside the release `.zip` now carry their real modified time instead of the ZIP epoch placeholder that showed up as **1979-12-31 / 1980-01-01** in Explorer.
+
 ## 2026-06-21.2
 
 ### Added
