@@ -232,14 +232,39 @@ pub fn rtx_skipped_no_gpu_hdr() -> bool {
     RTX_SKIPPED_NO_GPU_HDR.load(Ordering::Relaxed)
 }
 
-/// Enumerate DXGI adapters and report whether a hardware NVIDIA adapter is
-/// present. **Fail-open**: any failure to query DXGI returns `true`, so a working
-/// NVIDIA machine never loses RTX over a detection glitch. Returns `false` only
-/// when enumeration succeeds and turns up at least one hardware adapter, none of
-/// them NVIDIA — the case this guards (an active AMD/Intel iGPU with the NVIDIA
-/// dGPU switched off, where forcing the RTX path would only degrade playback).
+/// Outcome of probing DXGI for an NVIDIA GPU before enabling RTX video.
 #[cfg(target_os = "windows")]
-fn nvidia_adapter_present() -> bool {
+enum NvidiaProbe {
+    /// An NVIDIA adapter is present; the string is its DXGI description, used to
+    /// pin mpv's D3D11 device to it (`--d3d11-adapter`) so the RTX path renders on
+    /// the NVIDIA GPU even on a hybrid Optimus laptop whose desktop is composited
+    /// by the integrated GPU.
+    Found(String),
+    /// Enumeration succeeded with at least one hardware adapter, none NVIDIA —
+    /// e.g. a laptop whose NVIDIA dGPU is switched off, leaving only an AMD/Intel
+    /// iGPU. RTX is skipped so playback isn't degraded by a path the GPU can't do.
+    Absent,
+    /// DXGI couldn't be queried. **Fail-open**: proceed with RTX (don't pin), so a
+    /// working NVIDIA machine never loses RTX over a detection glitch.
+    Unknown,
+}
+
+/// Convert a `DXGI_ADAPTER_DESC1.Description` (NUL-terminated UTF-16) to a String.
+/// Mirrors mpv's own `mp_to_utf8(desc.Description)`, so the result is a valid
+/// prefix for mpv's case-insensitive `--d3d11-adapter` match against that adapter.
+#[cfg(target_os = "windows")]
+fn adapter_desc_to_string(desc: &[u16]) -> String {
+    let len = desc.iter().position(|&c| c == 0).unwrap_or(desc.len());
+    String::from_utf16_lossy(&desc[..len])
+}
+
+/// Enumerate DXGI adapters to decide whether RTX video should engage and, if so,
+/// which adapter to pin mpv to. Returns the NVIDIA adapter's description when one
+/// is present (so RTX is always routed to the NVIDIA GPU — including on an Optimus
+/// laptop with both an iGPU and a dGPU), `Absent` when only non-NVIDIA hardware is
+/// found, or `Unknown` (fail-open) when DXGI can't be queried.
+#[cfg(target_os = "windows")]
+fn probe_nvidia_adapter() -> NvidiaProbe {
     use windows::Win32::Graphics::Dxgi::{
         CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
     };
@@ -248,8 +273,8 @@ fn nvidia_adapter_present() -> bool {
     let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
         Ok(f) => f,
         Err(e) => {
-            tracing::warn!(target: "mpv", "DXGI factory creation failed ({e:?}); assuming NVIDIA present");
-            return true;
+            tracing::warn!(target: "mpv", "DXGI factory creation failed ({e:?}); proceeding without GPU pin");
+            return NvidiaProbe::Unknown;
         }
     };
 
@@ -272,17 +297,19 @@ fn nvidia_adapter_present() -> bool {
         }
         saw_hardware_adapter = true;
         if desc.VendorId == VENDOR_NVIDIA {
-            return true;
+            let name = adapter_desc_to_string(&desc.Description);
+            tracing::info!(target: "mpv", "NVIDIA adapter found: {name:?}; RTX will be pinned to it");
+            return NvidiaProbe::Found(name);
         }
     }
 
     if saw_hardware_adapter {
         tracing::info!(target: "mpv", "no NVIDIA adapter among DXGI hardware adapters; RTX enhancement will be skipped");
-        false
+        NvidiaProbe::Absent
     } else {
         // Couldn't enumerate any hardware adapter — don't second-guess; fail open.
-        tracing::warn!(target: "mpv", "no DXGI hardware adapters enumerated; assuming NVIDIA present");
-        true
+        tracing::warn!(target: "mpv", "no DXGI hardware adapters enumerated; proceeding without GPU pin");
+        NvidiaProbe::Unknown
     }
 }
 
@@ -296,19 +323,31 @@ fn apply_rtx_video(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<(
         return Ok(());
     }
 
-    // RTX VSR/HDR need an NVIDIA RTX GPU. If none is present (e.g. a laptop whose
-    // NVIDIA dGPU is switched off, leaving only an AMD/Intel iGPU), forcing the
-    // d3d11vpp NVIDIA path and the HDR output hint would only degrade playback,
-    // so skip enhancement entirely and leave the pipeline at its defaults. The
-    // check fails open, so a real NVIDIA system is never affected.
-    if !nvidia_adapter_present() {
-        RTX_SKIPPED_NO_GPU_VSR.store(boot.rtx_vsr, Ordering::Relaxed);
-        RTX_SKIPPED_NO_GPU_HDR.store(boot.rtx_hdr, Ordering::Relaxed);
-        tracing::info!(target: "mpv", "RTX VSR/HDR enabled in settings but no NVIDIA GPU detected; skipping (playback continues unmodified)");
-        return Ok(());
-    }
-
     let set = |name: &str, value: &str| set_option_or_skip(handle, name, value);
+
+    // RTX VSR/HDR need an NVIDIA RTX GPU, so route the whole D3D11 pipeline to it.
+    match probe_nvidia_adapter() {
+        // No NVIDIA GPU present (e.g. a laptop whose dGPU is switched off, leaving
+        // only an AMD/Intel iGPU): forcing the d3d11vpp NVIDIA path and the HDR
+        // output hint would only degrade playback, so skip enhancement entirely
+        // and leave the pipeline at its defaults.
+        NvidiaProbe::Absent => {
+            RTX_SKIPPED_NO_GPU_VSR.store(boot.rtx_vsr, Ordering::Relaxed);
+            RTX_SKIPPED_NO_GPU_HDR.store(boot.rtx_hdr, Ordering::Relaxed);
+            tracing::info!(target: "mpv", "RTX VSR/HDR enabled in settings but no NVIDIA GPU detected; skipping (playback continues unmodified)");
+            return Ok(());
+        }
+        // NVIDIA GPU present: pin mpv's D3D11 device to it so RTX always renders on
+        // the NVIDIA GPU, including on a hybrid Optimus laptop whose desktop is
+        // composited by the iGPU. mpv case-insensitively prefix-matches this
+        // against the adapter description; the exact description we read selects it.
+        NvidiaProbe::Found(name) => {
+            set("d3d11-adapter", &name)?;
+        }
+        // GPU couldn't be determined: fail open — proceed with RTX unpinned, so a
+        // real NVIDIA system never loses RTX over a detection glitch.
+        NvidiaProbe::Unknown => {}
+    }
 
     // The d3d11vpp filter only operates on D3D11 frames; software/other hwdec
     // backends can't feed it, so force D3D11 hardware decoding.

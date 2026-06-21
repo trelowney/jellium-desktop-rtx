@@ -2404,6 +2404,7 @@ dependencies = [
  "parking_lot",
  "pkg-config",
  "tracing",
+ "windows",
 ]
 
 [[package]]
