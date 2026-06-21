@@ -452,7 +452,7 @@ fn report_rtx_status_from_log(text: &str) {
 }
 
 /// One-shot: if RTX was enabled in settings but skipped because no NVIDIA GPU is
-/// present (see `jfn_mpv::boot::nvidia_adapter_present`), tell the web UI so
+/// present (see `jfn_mpv::boot::probe_nvidia_adapter`), tell the web UI so
 /// Playback Info shows "Unsupported" rather than a misleading "On". Driven off the
 /// first `time-pos` tick, by which point a file is playing and the CEF page —
 /// which renders the player UI itself — is guaranteed loaded, so the push lands.
