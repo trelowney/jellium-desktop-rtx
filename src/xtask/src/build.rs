@@ -29,10 +29,6 @@ pub fn run(args: &BuildArgs) -> Result<()> {
         .arg("jellyfin-desktop")
         .arg("--manifest-path")
         .arg(&manifest);
-    // Windows also builds the standalone self-update side-car.
-    if cfg!(target_os = "windows") {
-        cmd.arg("--bin").arg("jellyfin-desktop-rtx-updater");
-    }
     if args.no_kde_palette {
         cmd.arg("--no-default-features");
     }
@@ -104,8 +100,22 @@ pub fn run(args: &BuildArgs) -> Result<()> {
     let bin_dst = out.join(bin_name);
     xfs::copy_file(&bin_src, &bin_dst)?;
 
-    // Stage the updater side-car next to the app (Windows only).
+    // Build + stage the self-update side-car next to the app (Windows only). It's
+    // a separate `-p` invocation because it lives in its own package and shares
+    // none of the app's CEF/mpv build env.
     if cfg!(target_os = "windows") {
+        let mut up = Command::new("cargo");
+        up.arg("build")
+            .arg("--release")
+            .arg("-p")
+            .arg("jfn-updater")
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .env("CARGO_TARGET_DIR", &target_dir);
+        let up_status = up.status().context("spawn cargo build (updater)")?;
+        if !up_status.success() {
+            bail!("cargo build (updater) failed");
+        }
         let updater = "jellyfin-desktop-rtx-updater.exe";
         xfs::copy_file(&target_dir.join("release").join(updater), &out.join(updater))?;
     }
