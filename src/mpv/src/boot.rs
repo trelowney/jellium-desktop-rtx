@@ -11,6 +11,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::ptr;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::handle::Handle;
 use crate::sys;
@@ -213,6 +214,78 @@ fn apply_boot_options(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Resul
     Ok(())
 }
 
+/// RTX video enhancement was requested in settings but skipped because no NVIDIA
+/// GPU is present (e.g. a laptop whose dGPU is switched off, leaving only an
+/// AMD/Intel iGPU). Recorded per feature so the web UI's Playback Info can show
+/// "Unsupported" instead of a misleading "On". Set during mpv init; read from the
+/// playback event thread. Default `false` on every platform.
+static RTX_SKIPPED_NO_GPU_VSR: AtomicBool = AtomicBool::new(false);
+static RTX_SKIPPED_NO_GPU_HDR: AtomicBool = AtomicBool::new(false);
+
+/// True if RTX VSR was enabled in settings but skipped for lack of an NVIDIA GPU.
+pub fn rtx_skipped_no_gpu_vsr() -> bool {
+    RTX_SKIPPED_NO_GPU_VSR.load(Ordering::Relaxed)
+}
+
+/// True if RTX HDR was enabled in settings but skipped for lack of an NVIDIA GPU.
+pub fn rtx_skipped_no_gpu_hdr() -> bool {
+    RTX_SKIPPED_NO_GPU_HDR.load(Ordering::Relaxed)
+}
+
+/// Enumerate DXGI adapters and report whether a hardware NVIDIA adapter is
+/// present. **Fail-open**: any failure to query DXGI returns `true`, so a working
+/// NVIDIA machine never loses RTX over a detection glitch. Returns `false` only
+/// when enumeration succeeds and turns up at least one hardware adapter, none of
+/// them NVIDIA — the case this guards (an active AMD/Intel iGPU with the NVIDIA
+/// dGPU switched off, where forcing the RTX path would only degrade playback).
+#[cfg(target_os = "windows")]
+fn nvidia_adapter_present() -> bool {
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
+    };
+    const VENDOR_NVIDIA: u32 = 0x10DE;
+
+    let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(target: "mpv", "DXGI factory creation failed ({e:?}); assuming NVIDIA present");
+            return true;
+        }
+    };
+
+    let mut saw_hardware_adapter = false;
+    let mut index = 0u32;
+    loop {
+        // EnumAdapters1 returns DXGI_ERROR_NOT_FOUND past the last adapter.
+        let adapter = match unsafe { factory.EnumAdapters1(index) } {
+            Ok(a) => a,
+            Err(_) => break,
+        };
+        index += 1;
+        let desc = match unsafe { adapter.GetDesc1() } {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        // Skip the software/WARP renderer; it has no vendor GPU.
+        if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+            continue;
+        }
+        saw_hardware_adapter = true;
+        if desc.VendorId == VENDOR_NVIDIA {
+            return true;
+        }
+    }
+
+    if saw_hardware_adapter {
+        tracing::info!(target: "mpv", "no NVIDIA adapter among DXGI hardware adapters; RTX enhancement will be skipped");
+        false
+    } else {
+        // Couldn't enumerate any hardware adapter — don't second-guess; fail open.
+        tracing::warn!(target: "mpv", "no DXGI hardware adapters enumerated; assuming NVIDIA present");
+        true
+    }
+}
+
 /// Windows + NVIDIA RTX video enhancement via mpv's `d3d11vpp` filter:
 /// RTX Video Super Resolution (AI upscaling) and/or RTX Video HDR (SDR->HDR).
 /// Both consume D3D11 textures, so this overrides `hwdec` to `d3d11va`.
@@ -222,6 +295,19 @@ fn apply_rtx_video(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<(
     if !(boot.rtx_vsr || boot.rtx_hdr) {
         return Ok(());
     }
+
+    // RTX VSR/HDR need an NVIDIA RTX GPU. If none is present (e.g. a laptop whose
+    // NVIDIA dGPU is switched off, leaving only an AMD/Intel iGPU), forcing the
+    // d3d11vpp NVIDIA path and the HDR output hint would only degrade playback,
+    // so skip enhancement entirely and leave the pipeline at its defaults. The
+    // check fails open, so a real NVIDIA system is never affected.
+    if !nvidia_adapter_present() {
+        RTX_SKIPPED_NO_GPU_VSR.store(boot.rtx_vsr, Ordering::Relaxed);
+        RTX_SKIPPED_NO_GPU_HDR.store(boot.rtx_hdr, Ordering::Relaxed);
+        tracing::info!(target: "mpv", "RTX VSR/HDR enabled in settings but no NVIDIA GPU detected; skipping (playback continues unmodified)");
+        return Ok(());
+    }
+
     let set = |name: &str, value: &str| set_option_or_skip(handle, name, value);
 
     // The d3d11vpp filter only operates on D3D11 frames; software/other hwdec

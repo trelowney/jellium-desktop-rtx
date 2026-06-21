@@ -15,6 +15,14 @@ jfn-color = { path = "../color" }
 libc.workspace = true
 tracing.workspace = true
 
+# NVIDIA-GPU presence check (DXGI adapter enumeration) for the RTX video guard.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
+
 [build-dependencies]
 bindgen = "0.72"
 pkg-config = "0.3"
