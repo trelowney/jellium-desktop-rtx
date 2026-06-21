@@ -622,7 +622,14 @@ pub fn jfn_app_main() -> c_int {
     let boot = crate::window_geometry::controller().boot();
     plat().apply_boot_geometry(&boot);
 
-    let mpv_log_level = mpv_log_level_from_filter();
+    let mut mpv_log_level = mpv_log_level_from_filter();
+    // RTX VSR confirms success only at mpv's verbose level. Raise the log
+    // subscription (not the file filter) so the Playback Info indicator can show
+    // "Active" without the user manually enabling verbose logging. The file log
+    // is filtered separately, so it stays at the user's chosen level.
+    if (opts.rtx_vsr || opts.rtx_hdr) && matches!(mpv_log_level, "no" | "error" | "warn" | "info") {
+        mpv_log_level = "v";
+    }
 
     // mpv's --geometry takes physical pixels (see m_geometry_apply in
     // third_party/mpv/options/m_option.c).

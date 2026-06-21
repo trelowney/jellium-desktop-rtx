@@ -411,6 +411,10 @@ fn handle_message(message: BrowserMessage) -> bool {
             jfn_shutdown_initiate();
             true
         }
+        "applyUpdate" => with_args(args, |a| {
+            // a[0] = release zip URL chosen by the web UI's update check.
+            crate::updater::apply_update(&list_string(a, 0));
+        }),
         "openConfigDir" => {
             jfn_logging::log(
                 jfn_logging::CATEGORY_CEF,

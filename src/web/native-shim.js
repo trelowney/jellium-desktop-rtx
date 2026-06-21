@@ -78,6 +78,7 @@
     // window.jmpInfo - settings and device info
     window.jmpInfo = {
         version: '__APP_VERSION__',
+        releaseTag: '__APP_RELEASE_TAG__',
         deviceName: _savedSettings.deviceName || _savedSettings.deviceNameDefault,
         mode: 'desktop',
         userAgent: navigator.userAgent,
@@ -529,6 +530,64 @@
             }).observe(document.head, { childList: true });
         }
     });
+
+    // ---- Self-update check (Windows) -------------------------------------
+    // On startup, ask GitHub for the latest release. If its date is newer than
+    // this build, show a modal with the changelog and an "Update now" button
+    // that hands the release zip URL to the native updater. Best-effort: any
+    // failure (offline, API down, parse error) is swallowed so it never blocks.
+    (function() {
+        if (!navigator.platform.startsWith('Win')) return;
+        if (window.__rtxUpdateChecked) return;
+        window.__rtxUpdateChecked = true;
+
+        const REPO = 'trelowney/jellyfin-desktop-rtx';
+        // Exact tag this build was released as (set by CI). Empty on local
+        // builds → no reliable identity to compare, so skip the check.
+        const current = jmpInfo.releaseTag || '';
+        const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+        function showModal(rel, zipUrl) {
+            const back = document.createElement('div');
+            back.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-family:inherit;';
+            const body = esc(rel.body || '').trim() || 'No release notes.';
+            back.innerHTML =
+                '<div style="background:#202020;color:#eee;max-width:560px;width:90%;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);overflow:hidden">' +
+                  '<div style="padding:18px 22px;font-size:1.25em;font-weight:600;border-bottom:1px solid #333">Update available</div>' +
+                  '<div style="padding:14px 22px 0;opacity:.85">Version <b>' + esc(rel.tag_name) + '</b> &nbsp;·&nbsp; you have <b>' + esc(current || 'unknown') + '</b></div>' +
+                  '<pre style="margin:10px 22px;padding:12px;background:#181818;border-radius:6px;max-height:240px;overflow:auto;white-space:pre-wrap;font-size:.85em;line-height:1.4">' + body + '</pre>' +
+                  '<div style="padding:8px 22px 20px;display:flex;gap:10px;justify-content:flex-end">' +
+                    '<button id="rtxUpdLater" style="padding:9px 16px;border:0;border-radius:6px;background:#3a3a3a;color:#eee;cursor:pointer">Later</button>' +
+                    '<button id="rtxUpdNow" style="padding:9px 16px;border:0;border-radius:6px;background:#3da639;color:#fff;cursor:pointer;font-weight:600">Update now</button>' +
+                  '</div>' +
+                '</div>';
+            document.body.appendChild(back);
+            back.querySelector('#rtxUpdLater').onclick = () => back.remove();
+            back.querySelector('#rtxUpdNow').onclick = () => {
+                const btn = back.querySelector('#rtxUpdNow');
+                btn.textContent = 'Downloading & restarting…';
+                btn.disabled = true;
+                back.querySelector('#rtxUpdLater').disabled = true;
+                if (window.jmpNative && window.jmpNative.applyUpdate) {
+                    window.jmpNative.applyUpdate(zipUrl);
+                }
+            };
+        }
+
+        setTimeout(() => {
+            if (!current) return;
+            fetch('https://api.github.com/repos/' + REPO + '/releases/latest', { headers: { 'Accept': 'application/vnd.github+json' } })
+                .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                .then(rel => {
+                    // Different tag than the one we were built from => newer release.
+                    if (!rel.tag_name || rel.tag_name === current) return;
+                    const asset = (rel.assets || []).find(a => /\.zip$/i.test(a.name));
+                    if (!asset) return;
+                    showModal(rel, asset.browser_download_url);
+                })
+                .catch(e => console.debug('[Media] update check skipped:', e));
+        }, 4000);
+    })();
 
     console.debug('[Media] Native shim installed');
 })();

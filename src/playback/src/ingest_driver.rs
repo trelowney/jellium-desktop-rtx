@@ -430,16 +430,24 @@ fn report_rtx_status_from_log(text: &str) {
             "window._nativeRtxStatus&&window._nativeRtxStatus('{feature}','{state}')"
         ));
     };
-    if text.contains("NVIDIA RTX Super Resolution enabled") {
-        push("vsr", "active");
-    } else if text.contains("Failed to enable NVIDIA RTX Super Resolution") {
+    // VSR: success is verbose-only ("enabled"); failure is a warning.
+    if text.contains("Failed to enable NVIDIA RTX Super Resolution") {
         push("vsr", "failed");
-    } else if text.contains("NVIDIA RTX Video HDR enabled") {
-        push("hdr", "active");
-    } else if text.contains("NVIDIA RTX Video HDR not supported") {
+    } else if text.contains("NVIDIA RTX Super Resolution enabled") {
+        push("vsr", "active");
+    }
+    // HDR: check failures first — the unsupported-format warning also contains
+    // "for NVIDIA RTX Video HDR". The "Tagging image output as HDR ..." warning
+    // is emitted only on the success path and arrives without verbose logging.
+    if text.contains("Failed to enable NVIDIA RTX Video HDR")
+        || text.contains("NVIDIA RTX Video HDR not supported")
+        || text.contains("not supported for NVIDIA RTX Video HDR")
+    {
         push("hdr", "unsupported");
-    } else if text.contains("Failed to enable NVIDIA RTX Video HDR") {
-        push("hdr", "failed");
+    } else if text.contains("Tagging image output as HDR")
+        || text.contains("NVIDIA RTX Video HDR enabled")
+    {
+        push("hdr", "active");
     }
 }
 

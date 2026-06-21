@@ -50,6 +50,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let version_full =
         format!("RTX build {build_date} ({fork}) - base jellyfin-desktop {version}@{UPSTREAM_BASE}");
     println!("cargo:rustc-env=JFN_APP_VERSION_FULL={version_full}");
+
+    // The exact release tag this build corresponds to (CI sets it to the pushed
+    // tag, e.g. v2026.06.21). The updater compares this against the latest
+    // release tag by string equality — robust regardless of build-clock/UTC,
+    // unlike comparing dates. Empty for local builds, which disables the check.
+    println!("cargo:rerun-if-env-changed=JFN_RELEASE_TAG");
+    let release_tag = std::env::var("JFN_RELEASE_TAG").unwrap_or_default();
+    println!("cargo:rustc-env=JFN_RELEASE_TAG={release_tag}");
     track_git_refs(repo_root);
 
     let web_dir = repo_root.join("src").join("web");
