@@ -26,6 +26,19 @@ A personal fork of [**jellyfin/jellyfin-desktop**](https://github.com/jellyfin/j
 
 Grab the latest **`JellyfinDesktop-*-windows-x64.zip`** from the [**Releases**](../../releases) page, unzip it anywhere, and run `jellyfin-desktop.exe`.
 
+### "Windows protected your PC" (SmartScreen)
+
+On first run Windows may show a blue **"Windows protected your PC"** dialog. Click
+**More info → Run anyway**.
+
+This is expected and **not** a sign that anything is wrong. SmartScreen doesn't
+judge what the app does — it warns about any executable that is **unsigned** and
+that it hasn't seen before (no download "reputation" yet). This is a small
+personal fork with unsigned builds, so every release is an unknown file to
+SmartScreen, whereas the official client has built-up reputation. The RTX changes
+have nothing to do with it. After you choose **Run anyway** once, SmartScreen
+stops prompting for that build.
+
 ## Enabling RTX
 
 1. Open the app and connect to your server.
