@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-06-24.1
+
+### Fixed
+- **Self-update now actually launches.** Clicking **Update now** did nothing — the app stayed open and never downloaded or restarted. The bundled `jellyfin-desktop-rtx-updater.exe` side-car shipped without an application manifest, so Windows' UAC "Installer Detection" heuristic flagged it (its name ends in *updater*) as an installer needing admin rights; launching it from the un-elevated app then failed with `ERROR_ELEVATION_REQUIRED` (os error 740) and the update silently aborted. The updater now embeds an `asInvoker` manifest (the same thing Velopack/Squirrel ship with their `Update.exe`), so it launches in the app's normal context and the update proceeds. Also: if the hand-off ever fails again, the **Update now** button no longer hangs forever — it recovers after a few seconds and points you to the Releases page.
+
 ## 2026-06-24
 
 ### Fixed

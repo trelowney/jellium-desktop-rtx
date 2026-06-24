@@ -2467,6 +2467,7 @@ dependencies = [
 name = "jfn-updater"
 version = "3.0.0-dev"
 dependencies = [
+ "embed-resource",
  "windows",
  "zip",
 ]

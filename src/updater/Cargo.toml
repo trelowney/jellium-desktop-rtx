@@ -21,5 +21,10 @@ windows = { workspace = true, features = [
 # Same zip version the packager (xtask) uses, so no new lockfile resolution.
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
+# Embeds updater.rc -> updater.manifest (asInvoker) so UAC doesn't flag this
+# "...updater.exe" as an installer and demand elevation (else os error 740).
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
 [lints]
 workspace = true
