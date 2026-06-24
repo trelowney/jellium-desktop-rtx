@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-06-24
+
+### Fixed
+- **Green screen on HDR sources when RTX HDR is off.** With RTX VSR enabled and RTX HDR disabled (the right setup on an SDR display), playing a 10-bit HDR source — e.g. a 4K HDR10 episode — showed a solid green image. The `d3d11vpp` filter was only given a defined 10-bit output format (`x2bgr10`) when the HDR conversion was on, so a VSR-only chain emitted the HDR frame in a format the renderer misread. The filter now always outputs `x2bgr10`, so HDR content is tone-mapped down to SDR correctly (as the stock client does) without turning on RTX HDR — which on an SDR display over-saturates non-HDR content. RTX HDR's true-HDR conversion is unchanged and still gated on its own toggle.
+
 ## 2026-06-21.4
 
 ### Changed

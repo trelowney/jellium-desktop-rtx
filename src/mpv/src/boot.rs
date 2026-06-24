@@ -365,9 +365,14 @@ fn apply_rtx_video(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<(
         // afterwards. Dynamic display-matched scaling is a possible follow-up.
         parts.push("scale=2".into());
     }
+    // Always give the VPP a defined 10-bit output format. Without it, a 10-bit
+    // HDR source (BT.2020 PQ / P010) pushed through a VSR-only chain — RTX HDR
+    // conversion off — is emitted in a format the renderer misreads, producing
+    // a green frame. A fixed x2bgr10 output lets mpv tone-map HDR->SDR itself
+    // (matching the stock client's behaviour on an SDR display) and is harmless
+    // for 8-bit SDR input. The true-HDR conversion stays gated on rtx_hdr below.
+    parts.push("format=x2bgr10".into());
     if boot.rtx_hdr {
-        // A 10-bit output format is required for the true-HDR conversion.
-        parts.push("format=x2bgr10".into());
         parts.push("nvidia-true-hdr".into());
     }
     let vf = format!("d3d11vpp={}", parts.join(":"));
