@@ -568,12 +568,30 @@
             back.querySelector('#rtxUpdLater').onclick = () => back.remove();
             back.querySelector('#rtxUpdNow').onclick = () => {
                 const btn = back.querySelector('#rtxUpdNow');
+                const later = back.querySelector('#rtxUpdLater');
                 btn.textContent = 'Downloading & restarting…';
                 btn.disabled = true;
-                back.querySelector('#rtxUpdLater').disabled = true;
+                later.disabled = true;
                 if (window.jmpNative && window.jmpNative.applyUpdate) {
                     // url, size (bytes, for the progress bar), version tag.
                     window.jmpNative.applyUpdate(asset.browser_download_url, String(asset.size || 0), rel.tag_name || '');
+                    // Safety net: when the hand-off works the app exits within a
+                    // couple of seconds (and this timer dies with it). If we're
+                    // still alive after a grace period the side-car never took
+                    // over (e.g. it couldn't be launched), so don't leave the
+                    // button stuck forever — recover and point at the manual zip.
+                    setTimeout(() => {
+                        if (!document.body.contains(back)) return;
+                        btn.textContent = 'Update now';
+                        btn.disabled = false;
+                        later.disabled = false;
+                        showToast('Update could not start — download it manually from the Releases page');
+                    }, 12000);
+                } else {
+                    btn.textContent = 'Update now';
+                    btn.disabled = false;
+                    later.disabled = false;
+                    showToast('Self-update is unavailable in this build — download from the Releases page');
                 }
             };
         }
