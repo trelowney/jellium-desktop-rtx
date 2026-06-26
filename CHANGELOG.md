@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-06-26.1
+
+### Changed
+- **Re-synced onto upstream jellyfin-desktop `3.0.0-dev@865e186`** (was `@676919e`). Picks up upstream's recent work: **CEF bumped to 149.2.0** (newer Chromium under the web UI), the built-in right-click context-menu commands (back / reload / cut / copy / paste) are now handled directly by CEF instead of a hand-maintained table, and context-menu delivery was hardened so a menu item can no longer silently do nothing. macOS-only and dependency-only upstream changes ride along but don't affect the Windows build. All RTX features, the self-updater, the separate data dir, and the subtitle-offset fix below are preserved unchanged on top of the new base.
+
 ## 2026-06-26
 
 ### Fixed

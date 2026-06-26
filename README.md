@@ -14,7 +14,7 @@ A personal fork of [**jellyfin/jellyfin-desktop**](https://github.com/jellyfin/j
 - **Playback Info shows RTX status** — RTX VSR and RTX HDR are reported separately, so you can see whether each is applied.
 - **Separate data directory** — stores settings/cache/logs under `jellyfin-desktop-rtx`, so it won't clash with an installed stock jellyfin-desktop. On first run it **migrates settings from the stock install** (if present), so you don't have to log in / reconfigure.
 - **Distinct branding** — green icon and "Jellyfin Desktop RTX" title, so it's obvious which build is running.
-- **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-06-20 (<commit>) · base jellyfin-desktop 3.0.0-dev@676919e`, so you always know the build date and which upstream commit it was made from.
+- **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-06-26 (<commit>) · base jellyfin-desktop 3.0.0-dev@865e186`, so you always know the build date and which upstream commit it was made from.
 
 ## Requirements
 
