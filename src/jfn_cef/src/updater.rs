@@ -17,7 +17,20 @@ pub(crate) fn apply_update(zip_url: &str, size: u64, version: &str) {
                     jfn_logging::LEVEL_INFO,
                     "Update: side-car launched; exiting to apply",
                 );
+                // Best-effort graceful shutdown (lets the settings save worker
+                // flush), but GUARANTEE the process dies quickly: the graceful
+                // CEF teardown can deadlock when initiated from this IPC thread,
+                // which left the app running indefinitely — so the side-car
+                // could never replace the locked files and the UI fell back to
+                // "download manually". We're being replaced by the relaunch, so
+                // a hard exit after a short grace is the correct, reliable path.
                 jfn_playback::shutdown::jfn_shutdown_initiate();
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    // ExitProcess (not process::exit) so no atexit/global dtor
+                    // — which is where the graceful path hangs — can stall us.
+                    unsafe { windows::Win32::System::Threading::ExitProcess(0) };
+                });
             }
             Err(e) => {
                 jfn_logging::log(

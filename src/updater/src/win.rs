@@ -163,6 +163,7 @@ fn do_update(args: &Args, shared: &Shared) -> Result<(), String> {
     verify_zip(&tmp)?;
 
     shared.phase.store(PHASE_EXTRACT, Ordering::Release);
+    sweep_old_files(Path::new(&args.dir));
     extract_over(&tmp, Path::new(&args.dir))?;
     let _ = std::fs::remove_file(&tmp);
     Ok(())
@@ -262,18 +263,63 @@ fn extract_over(tmp: &Path, dir: &Path) -> Result<(), String> {
 
 fn write_with_retry(out: &Path, data: &[u8]) -> Result<(), String> {
     use std::io::Write;
-    for attempt in 0..30u32 {
+    // Fast path + a few brief retries for transient locks (a CEF child briefly
+    // holding a DLL right after the app exits).
+    for attempt in 0..6u32 {
         match std::fs::File::create(out) {
             Ok(mut file) => {
                 return file
                     .write_all(data)
                     .map_err(|e| format!("Zápis {} selhal: {e}", out.display()));
             }
-            Err(_) if attempt < 29 => std::thread::sleep(Duration::from_millis(500)),
-            Err(e) => return Err(format!("Vytvoření {} selhalo: {e}", out.display())),
+            Err(_) if attempt < 5 => std::thread::sleep(Duration::from_millis(300)),
+            Err(_) => break,
         }
     }
-    Ok(())
+    // Still locked: the target is a loaded image (the app exe/DLLs — or our own
+    // updater exe). Windows won't let us OVERWRITE a running image, but it WILL
+    // let us RENAME it aside (images are opened with FILE_SHARE_DELETE) — the
+    // same technique Squirrel/Velopack rely on. Move the old file out of the
+    // way, then write the new one in its place. The `.old-*` leftover is swept
+    // at the start of the next update.
+    if out.exists() {
+        let aside = {
+            let mut name = out
+                .file_name()
+                .map(std::ffi::OsStr::to_os_string)
+                .unwrap_or_default();
+            name.push(format!(".old-{}", std::process::id()));
+            out.with_file_name(name)
+        };
+        let _ = std::fs::remove_file(&aside);
+        std::fs::rename(out, &aside)
+            .map_err(|e| format!("Nelze odsunout zamčený soubor {}: {e}", out.display()))?;
+    }
+    let mut file = std::fs::File::create(out)
+        .map_err(|e| format!("Vytvoření {} selhalo: {e}", out.display()))?;
+    file.write_all(data)
+        .map_err(|e| format!("Zápis {} selhal: {e}", out.display()))
+}
+
+/// Best-effort sweep of `.old-*` leftovers from a previous update's rename-aside
+/// step. By the time we run again the processes that locked them are gone, so
+/// they delete cleanly.
+fn sweep_old_files(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            sweep_old_files(&p);
+        } else if p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(".old-"))
+        {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
 }
 
 fn relaunch(exe: &str, dir: &str) -> std::io::Result<()> {

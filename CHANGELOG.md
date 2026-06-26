@@ -5,6 +5,9 @@ published from the matching section below.
 
 ## 2026-06-26.1
 
+### Fixed
+- **Self-update actually applies now** — the real root cause behind the repeated "downloading… → unable, download manually" failures: **the app never quit after handing off to the updater.** Clicking *Update now* asked for a graceful shutdown, but that path deadlocks when triggered from the in-app update call, so the app kept running — which meant (a) the web UI's 12-second safety net fired the "download it manually" toast, and (b) the side-car, waiting for the app to exit, eventually extracted over files the still-running app (and its CEF/mpv child processes) held locked, and failed. Two fixes: the app now **force-exits shortly after launching the side-car** (best-effort graceful save first, then a hard `ExitProcess` so the deadlock can't keep it alive), and the side-car no longer depends on perfect unlock timing — if a target file is still a loaded image it **renames the old file aside and writes the new one in its place** (the `MoveFile`-a-running-image technique Squirrel/Velopack use), sweeping the `.old-*` leftovers on the next run.
+
 ### Changed
 - **Re-synced onto upstream jellyfin-desktop `3.0.0-dev@865e186`** (was `@676919e`). Picks up upstream's recent work: **CEF bumped to 149.2.0** (newer Chromium under the web UI), the built-in right-click context-menu commands (back / reload / cut / copy / paste) are now handled directly by CEF instead of a hand-maintained table, and context-menu delivery was hardened so a menu item can no longer silently do nothing. macOS-only and dependency-only upstream changes ride along but don't affect the Windows build. All RTX features, the self-updater, the separate data dir, and the subtitle-offset fix below are preserved unchanged on top of the new base.
 
