@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-06-26
+
+### Fixed
+- **Subtitle sync / offset now works from the player** — a fix for a stock **jellyfin-desktop** bug, not something the RTX fork introduced (it's broken the same way in the unmodified upstream client). Nudging the subtitle delay control did nothing: no matter how far forward or back you shifted, the subtitles stayed exactly as wrong (it worked in the web client, but not in either desktop build). The mpv video player already implemented the full subtitle-offset chain (`setSubtitleOffset` → `setSubtitleDelay` → native `playerSetSubtitleDelay` → mpv `sub-delay`, units and sign correct), but never advertised the `SubtitleOffset` capability, so jellyfin-web assumed the player couldn't offset subtitles and never called any of it. The player now reports `SubtitleOffset` among its supported features, so the in-player control drives mpv's `sub-delay` as intended.
+
 ## 2026-06-24.1
 
 ### Fixed
