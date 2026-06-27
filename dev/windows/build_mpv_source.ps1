@@ -170,7 +170,7 @@ cd '$MsysMpvSource' && \
 meson setup build --default-library=shared \
     -Dlibmpv=true \
     -Dcplayer=true \
-    -Dlua=disabled \
+    -Dlua=luajit \
     -Djavascript=disabled \
     -Dcdda=disabled \
     -Ddvdnav=disabled \
