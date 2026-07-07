@@ -3,6 +3,15 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-07-07
+
+### Fixed
+- **Self-update works.** Clicking **Update now** now downloads the new release in a progress window, swaps the app in place and relaunches it — the flow that had silently failed with "download it manually" for weeks. The real cause was the updater side-car's embedded manifest: it was **malformed XML** (an explanatory comment contained `--`, which the XML spec forbids inside comments), so Windows refused to start the side-car with `ERROR_SXS_CANT_GEN_ACTCTX` (os error 14001) and the update silently aborted. The manifest is now valid, and the build validates it and fails if any comment contains `--`, so it can't regress. The hand-off is hardened too: the app force-quits with `TerminateProcess` (a kernel-level exit that can't deadlock against CEF/NVIDIA teardown, unlike the previous `ExitProcess`), armed before the graceful save, and the side-car force-closes the app itself if it hasn't exited shortly after hand-off — so applying an update never depends on a clean shutdown.
+- **About shows the release date.** The version string is derived from the release tag, so its date always matches the version (it previously showed the wall-clock build date, which could differ).
+
+### Changed
+- **Re-synced onto upstream jellyfin-desktop `225af09b`.** Picks up upstream's dependency bumps — **CEF `149.2.0` → `149.3.0`** (newer Chromium under the web UI), plus `wgpu`/`wgpu-hal` `29.0.4`, `time` `0.3.53`, and `embed-resource` `3.0.11`. No upstream source or feature changes; all RTX features and the subtitle-offset fix are unchanged.
+
 ## 2026-06-26.1
 
 ### Fixed

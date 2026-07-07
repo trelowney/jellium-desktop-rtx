@@ -3,7 +3,7 @@ use std::path::PathBuf;
 /// Upstream jellyfin-desktop commit this RTX fork is currently based on.
 /// Bump this whenever the fork is re-synced onto a newer upstream version, so
 /// the in-app version keeps showing which original build it was made from.
-const UPSTREAM_BASE: &str = "865e186";
+const UPSTREAM_BASE: &str = "225af09b";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -39,18 +39,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         git_hash.clone()
     };
-    let build_date = build_date();
-    println!("cargo:rustc-env=JFN_BUILD_DATE={build_date}");
-    // Shown in the app (About / Playback info). Encodes: this is the RTX fork,
-    // the build date + fork commit, and which upstream jellyfin-desktop version
-    // and commit it was built from.
-    // ASCII-only: this string is reported to the server in the auth header and
-    // used as a User-Agent, and a non-ASCII byte there breaks the HTTP request
-    // (it caused "Connection Failure"). Keep punctuation plain.
-    let version_full =
-        format!("RTX build {build_date} ({fork}) - base jellyfin-desktop {version}@{UPSTREAM_BASE}");
-    println!("cargo:rustc-env=JFN_APP_VERSION_FULL={version_full}");
-
     // The exact release tag this build corresponds to (CI sets it to the pushed
     // tag, e.g. v2026.06.21). The updater compares this against the latest
     // release tag by string equality — robust regardless of build-clock/UTC,
@@ -58,6 +46,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-env-changed=JFN_RELEASE_TAG");
     let release_tag = std::env::var("JFN_RELEASE_TAG").unwrap_or_default();
     println!("cargo:rustc-env=JFN_RELEASE_TAG={release_tag}");
+
+    // Date shown in About / Playback info. Prefer the RELEASE TAG's date
+    // (`vYYYY.MM.DD[.N]` -> `YYYY-MM-DD`) so the shown date always matches the
+    // version, no matter which day CI ran or how the tag was dated. Fall back to
+    // the wall-clock UTC build date for local/dev builds that have no tag.
+    let build_date = release_date(&release_tag).unwrap_or_else(build_date);
+    println!("cargo:rustc-env=JFN_BUILD_DATE={build_date}");
+    // Shown in the app (About / Playback info). Encodes: this is the RTX fork,
+    // the build date + fork commit, and which upstream jellyfin-desktop version
+    // and commit it was built from.
+    // ASCII-only: this string is reported to the server in the auth header and
+    // used as a User-Agent, and a non-ASCII byte there breaks the HTTP request
+    // (it caused "Connection Failure"). Keep punctuation plain.
+    let version_full = format!(
+        "RTX build {build_date} ({fork}) - base jellyfin-desktop {version}@{UPSTREAM_BASE}"
+    );
+    println!("cargo:rustc-env=JFN_APP_VERSION_FULL={version_full}");
     track_git_refs(repo_root);
 
     let web_dir = repo_root.join("src").join("web");
@@ -80,6 +85,21 @@ fn git_info(repo_root: &std::path::Path) -> (String, bool) {
         .unwrap_or_default();
     let dirty = repo.is_dirty().unwrap_or(false);
     (hash, dirty)
+}
+
+/// A release tag `vYYYY.MM.DD[.N]` -> `YYYY-MM-DD`, so the shown date matches the
+/// version. `None` for anything not in that shape (e.g. local builds: empty tag).
+fn release_date(tag: &str) -> Option<String> {
+    let t = tag.strip_prefix('v').unwrap_or(tag);
+    let mut parts = t.split('.');
+    let (y, m, d) = (parts.next()?, parts.next()?, parts.next()?);
+    let ok = y.len() == 4
+        && m.len() == 2
+        && d.len() == 2
+        && [y, m, d]
+            .iter()
+            .all(|s| s.bytes().all(|b| b.is_ascii_digit()));
+    ok.then(|| format!("{y}-{m}-{d}"))
 }
 
 /// UTC build date as `YYYY-MM-DD`, with no external crates. Captured when this
