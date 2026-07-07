@@ -5,7 +5,7 @@
   The whole point of this file: declare `requestedExecutionLevel asInvoker`.
   Without an embedded manifest, Windows' UAC "Installer Detection" heuristic
   treats any executable whose name (or VERSIONINFO description) looks like an
-  installer/updater -- ours is literally "...updater.exe" -- as an elevated
+  installer/updater (ours is literally "...updater.exe") as an elevated
   installer. The parent app runs un-elevated, so its CreateProcess() of this
   side-car then fails with ERROR_ELEVATION_REQUIRED (os error 740) and the
   self-update silently does nothing. Declaring asInvoker overrides the

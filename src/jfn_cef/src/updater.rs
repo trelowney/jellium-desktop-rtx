@@ -17,20 +17,41 @@ pub(crate) fn apply_update(zip_url: &str, size: u64, version: &str) {
                     jfn_logging::LEVEL_INFO,
                     "Update: side-car launched; exiting to apply",
                 );
-                // Best-effort graceful shutdown (lets the settings save worker
-                // flush), but GUARANTEE the process dies quickly: the graceful
-                // CEF teardown can deadlock when initiated from this IPC thread,
-                // which left the app running indefinitely — so the side-car
-                // could never replace the locked files and the UI fell back to
-                // "download manually". We're being replaced by the relaunch, so
-                // a hard exit after a short grace is the correct, reliable path.
-                jfn_playback::shutdown::jfn_shutdown_initiate();
+                // GUARANTEE the process dies — this is the whole ballgame. The
+                // app being replaced doesn't need a clean teardown, but it MUST
+                // actually exit, or the side-car waits forever and the UI falls
+                // back to "download manually" (the exact bug this file kept
+                // failing to fix).
+                //
+                // Two rules learned the hard way:
+                //  1. Arm the guaranteed kill BEFORE any graceful teardown, so
+                //     nothing that runs in between can stop us dying.
+                //  2. Kill with TerminateProcess(GetCurrentProcess()), NOT
+                //     ExitProcess. ExitProcess still runs DLL_PROCESS_DETACH for
+                //     every DLL under the loader lock and terminates other
+                //     threads while they hold locks — with CEF's GPU/renderer
+                //     processes and the NVIDIA driver that detach DEADLOCKS, so
+                //     the process never actually exits. TerminateProcess is a
+                //     kernel-level kill that runs zero user-mode cleanup and
+                //     cannot deadlock — the same primitive Chromium uses for
+                //     immediate shutdown.
                 std::thread::spawn(|| {
+                    use windows::Win32::System::Threading::{
+                        ExitProcess, GetCurrentProcess, TerminateProcess,
+                    };
+                    // Short grace so the settings save worker (woken below) can
+                    // flush; then hard-kill no matter what state teardown is in.
                     std::thread::sleep(std::time::Duration::from_millis(1500));
-                    // ExitProcess (not process::exit) so no atexit/global dtor
-                    // — which is where the graceful path hangs — can stall us.
-                    unsafe { windows::Win32::System::Threading::ExitProcess(0) };
+                    unsafe {
+                        let _ = TerminateProcess(GetCurrentProcess(), 0);
+                        // Only reached if TerminateProcess ever no-ops; still die.
+                        ExitProcess(0);
+                    }
                 });
+                // Best-effort graceful flush (settings save worker). Safe even
+                // if it blocks or hangs — the watchdog above already owns our
+                // death.
+                jfn_playback::shutdown::jfn_shutdown_initiate();
             }
             Err(e) => {
                 jfn_logging::log(

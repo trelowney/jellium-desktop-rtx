@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use windows::Win32::Foundation::{
-    CloseHandle, COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM,
+    COLORREF, CloseHandle, HWND, LPARAM, LRESULT, RECT, WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DEFAULT_GUI_FONT, DRAW_TEXT_FORMAT, DT_LEFT, DT_SINGLELINE,
@@ -16,7 +16,9 @@ use windows::Win32::Graphics::Gdi::{
     PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject};
+use windows::Win32::System::Threading::{
+    OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess, WaitForSingleObject,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
     IDC_ARROW, KillTimer, LoadCursorW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
@@ -152,7 +154,7 @@ fn run_update(args: &Args, shared: &Shared) {
 
 fn do_update(args: &Args, shared: &Shared) -> Result<(), String> {
     shared.phase.store(PHASE_WAIT, Ordering::Release);
-    wait_for_pid(args.pid, 60_000);
+    wait_for_pid(args.pid, 15_000);
 
     shared.phase.store(PHASE_DOWNLOAD, Ordering::Release);
     let tmp = std::env::temp_dir().join("jellyfin-desktop-rtx-update.zip");
@@ -171,14 +173,27 @@ fn do_update(args: &Args, shared: &Shared) -> Result<(), String> {
 
 /// Wait until the main app (pid) exits so its files unlock. Returns immediately
 /// if the process is already gone or can't be opened.
+///
+/// The app arms its own hard self-kill on hand-off, so normally it's gone within
+/// a couple of seconds. But correctness must not DEPEND on that succeeding: if it
+/// still hasn't exited when the wait times out, we force-terminate it ourselves
+/// (we hold the pid) so we never extract over a live install — then wait for it
+/// to actually die. This is the belt-and-braces that makes the update robust even
+/// if the app-side shutdown ever deadlocks again.
 fn wait_for_pid(pid: u32, timeout_ms: u32) {
     unsafe {
-        if let Ok(handle) = OpenProcess(PROCESS_SYNCHRONIZE, false, pid) {
-            if !handle.is_invalid() {
-                let _ = WaitForSingleObject(handle, timeout_ms);
-                let _ = CloseHandle(handle);
-            }
+        let Ok(handle) = OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, pid) else {
+            return;
+        };
+        if handle.is_invalid() {
+            return;
         }
+        if WaitForSingleObject(handle, timeout_ms) == WAIT_TIMEOUT {
+            // App failed to exit on its own — force it down and give it a moment.
+            let _ = TerminateProcess(handle, 0);
+            let _ = WaitForSingleObject(handle, 10_000);
+        }
+        let _ = CloseHandle(handle);
     }
 }
 
@@ -437,7 +452,12 @@ fn paint(hwnd: HWND) {
     draw_text(
         hdc,
         "Jellyfin Desktop RTX",
-        RECT { left: margin, top: 18, right: width - margin, bottom: 42 },
+        RECT {
+            left: margin,
+            top: 18,
+            right: width - margin,
+            bottom: 42,
+        },
         COL_WHITE,
         DT_LEFT.0 | DT_SINGLELINE.0 | DT_VCENTER.0,
     );
@@ -449,28 +469,60 @@ fn paint(hwnd: HWND) {
     draw_text(
         hdc,
         &status,
-        RECT { left: margin, top: 58, right: width - margin, bottom: 82 },
+        RECT {
+            left: margin,
+            top: 58,
+            right: width - margin,
+            bottom: 82,
+        },
         COL_GREY,
         DT_LEFT.0 | DT_SINGLELINE.0 | DT_VCENTER.0,
     );
 
     // Progress bar.
-    let bar = RECT { left: margin, top: 104, right: width - margin, bottom: 124 };
+    let bar = RECT {
+        left: margin,
+        top: 104,
+        right: width - margin,
+        bottom: 124,
+    };
     fill(hdc, &bar, COL_TRACK);
     let frac = progress_fraction(shared, phase);
     if frac > 0.0 {
         let span = (bar.right - bar.left) as f64;
         let fill_right = bar.left + (span * frac).round() as i32;
-        let filled = RECT { left: bar.left, top: bar.top, right: fill_right, bottom: bar.bottom };
-        fill(hdc, &filled, if phase == PHASE_ERROR { COL_TRACK } else { COL_GREEN });
+        let filled = RECT {
+            left: bar.left,
+            top: bar.top,
+            right: fill_right,
+            bottom: bar.bottom,
+        };
+        fill(
+            hdc,
+            &filled,
+            if phase == PHASE_ERROR {
+                COL_TRACK
+            } else {
+                COL_GREEN
+            },
+        );
     }
 
     // Detail line (MB counter or error message).
-    let detail_color = if phase == PHASE_ERROR { COL_GREEN } else { COL_GREY };
+    let detail_color = if phase == PHASE_ERROR {
+        COL_GREEN
+    } else {
+        COL_GREY
+    };
     draw_text(
         hdc,
         &detail,
-        RECT { left: margin, top: 138, right: width - margin, bottom: 184 },
+        RECT {
+            left: margin,
+            top: 138,
+            right: width - margin,
+            bottom: 184,
+        },
         detail_color,
         DT_LEFT.0 | DT_SINGLELINE.0 | DT_VCENTER.0,
     );
