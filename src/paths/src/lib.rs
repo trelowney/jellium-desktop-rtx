@@ -15,7 +15,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 
-const APP_DIR_NAME: &str = "jellium-desktop";
+// Separate data dir from upstream jellium-desktop so the two installs don't
+// share config: the upstream app rewrites settings.json without the RTX keys,
+// which would silently disable RTX in this build. Keeping a distinct dir lets
+// both run side by side with independent settings, cache, logs and device id.
+// Old pre-rename dir was "jellyfin-desktop-rtx"; migrated on first run.
+const APP_DIR_NAME: &str = "jellium-desktop-rtx";
 const LOG_FILE_NAME: &str = "jellium-desktop.log";
 
 #[derive(Default)]
@@ -100,6 +105,43 @@ pub fn cache_dir() -> PathBuf {
         return ensure(path);
     }
     ensure(imp::cache_base().join(APP_DIR_NAME))
+}
+
+/// One-time settings migration from a prior install into this build's data dir
+/// ([`APP_DIR_NAME`]). On first run we have no settings yet; copy `settings.json`
+/// and device `instance.json` from the first prior install that has them, in
+/// priority order:
+///   1. `jellyfin-desktop-rtx` — this fork's own pre-rename dir (keeps the RTX
+///      keys and the existing server login),
+///   2. `jellium-desktop` — upstream's current dir,
+///   3. `jellyfin-desktop` — upstream's pre-rename dir.
+/// So the user keeps their login and preferences instead of reconfiguring.
+/// No-op when our settings already exist, when a config override is set, or when
+/// there's nothing to copy.
+pub fn migrate_legacy_config() {
+    // A custom config override opts out — only the default location migrates.
+    if config_override().is_some() {
+        return;
+    }
+    let dst = config_dir();
+    let legacy_names = ["jellyfin-desktop-rtx", "jellium-desktop", "jellyfin-desktop"];
+    for name in ["settings.json", "instance.json"] {
+        let dstf = dst.join(name);
+        if dstf.exists() {
+            continue;
+        }
+        for legacy_name in legacy_names {
+            let legacy = imp::config_base().join(legacy_name);
+            if legacy == dst {
+                continue;
+            }
+            let srcf = legacy.join(name);
+            if srcf.exists() {
+                let _ = fs::copy(&srcf, &dstf);
+                break;
+            }
+        }
+    }
 }
 
 pub fn log_dir() -> PathBuf {

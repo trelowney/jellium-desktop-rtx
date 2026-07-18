@@ -416,6 +416,60 @@ pub fn jfn_playback_stop_mpv_event_thread() {
     }
 }
 
+/// Surface mpv's d3d11vpp RTX outcome to the web UI (Playback Info). mpv logs
+/// success at verbose and failure at warn, so forward whichever level arrives.
+/// Pushed over the same exec_js bridge used for other native->web updates;
+/// the JS side stashes it for the player's getStats().
+fn report_rtx_status_from_log(text: &str) {
+    let push = |feature: &str, state: &str| {
+        crate::exec_js::call(&format!(
+            "window._nativeRtxStatus&&window._nativeRtxStatus('{feature}','{state}')"
+        ));
+    };
+    // VSR: success is verbose-only ("enabled"); failure is a warning.
+    if text.contains("Failed to enable NVIDIA RTX Super Resolution") {
+        push("vsr", "failed");
+    } else if text.contains("NVIDIA RTX Super Resolution enabled") {
+        push("vsr", "active");
+    }
+    // HDR: check failures first — the unsupported-format warning also contains
+    // "for NVIDIA RTX Video HDR". The "Tagging image output as HDR ..." warning
+    // is emitted only on the success path and arrives without verbose logging.
+    if text.contains("Failed to enable NVIDIA RTX Video HDR")
+        || text.contains("NVIDIA RTX Video HDR not supported")
+        || text.contains("not supported for NVIDIA RTX Video HDR")
+    {
+        push("hdr", "unsupported");
+    } else if text.contains("Tagging image output as HDR")
+        || text.contains("NVIDIA RTX Video HDR enabled")
+    {
+        push("hdr", "active");
+    }
+}
+
+/// One-shot: if RTX was enabled in settings but skipped because no NVIDIA GPU is
+/// present (see `jfn_mpv::boot::probe_nvidia_adapter`), tell the web UI so
+/// Playback Info shows "Unsupported" rather than a misleading "On". Driven off the
+/// first `time-pos` tick, by which point a file is playing and the CEF page —
+/// which renders the player UI itself — is guaranteed loaded, so the push lands.
+fn push_rtx_skip_status_once() {
+    static PUSHED: AtomicBool = AtomicBool::new(false);
+    if PUSHED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let push = |feature: &str| {
+        crate::exec_js::call(&format!(
+            "window._nativeRtxStatus&&window._nativeRtxStatus('{feature}','unsupported')"
+        ));
+    };
+    if jfn_mpv::boot::rtx_skipped_no_gpu_vsr() {
+        push("vsr");
+    }
+    if jfn_mpv::boot::rtx_skipped_no_gpu_hdr() {
+        push("hdr");
+    }
+}
+
 fn event_loop(handle_addr: usize, stop: std::sync::Arc<AtomicBool>) {
     let handle = handle_addr as *mut mpv_sys::mpv_handle;
     loop {
@@ -428,6 +482,7 @@ fn event_loop(handle_addr: usize, stop: std::sync::Arc<AtomicBool>) {
             Event::None => continue,
             Event::LogMessage(ref m) => {
                 jfn_mpv::forward_log_to_tracing(m);
+                report_rtx_status_from_log(&m.text);
                 continue;
             }
             Event::PropertyChange { id, ref value, .. } => {
@@ -435,6 +490,9 @@ fn event_loop(handle_addr: usize, stop: std::sync::Arc<AtomicBool>) {
                     && let PropertyValue::Flag(f) = value
                 {
                     invoke_fullscreen_handler(*f);
+                }
+                if id == crate::ingest::observe_id::TIME_POS {
+                    push_rtx_skip_status_once();
                 }
             }
             _ => {}

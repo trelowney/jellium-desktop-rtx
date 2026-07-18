@@ -2248,6 +2248,7 @@ dependencies = [
  "parking_lot",
  "serde_json",
  "slotmap",
+ "windows",
 ]
 
 [[package]]
@@ -2394,6 +2395,7 @@ dependencies = [
  "parking_lot",
  "pkg-config",
  "tracing",
+ "windows",
 ]
 
 [[package]]
@@ -2449,6 +2451,15 @@ dependencies = [
  "serde_json",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "jfn-updater"
+version = "0.1.0-dev"
+dependencies = [
+ "embed-resource",
+ "windows",
+ "zip",
 ]
 
 [[package]]

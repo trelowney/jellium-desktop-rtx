@@ -16,11 +16,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "Jellium"
-            VALUE "FileDescription",  "Jellium Desktop"
+            VALUE "FileDescription",  "Jellium Desktop RTX"
             VALUE "FileVersion",      "@APP_VERSION_FULL@"
             VALUE "InternalName",     "jellium-desktop"
             VALUE "OriginalFilename", "jellium-desktop.exe"
-            VALUE "ProductName",      "Jellium Desktop"
+            VALUE "ProductName",      "Jellium Desktop RTX"
             VALUE "ProductVersion",   "@APP_VERSION_FULL@"
         END
     END

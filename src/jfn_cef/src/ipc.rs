@@ -49,6 +49,19 @@ pub(crate) fn list_int(args: &ListValue, idx: usize) -> i32 {
     }
 }
 
+/// Mirror of [`list_int`] for the other direction: V8 marshals a whole-number JS
+/// value (e.g. `2000 / 1000 == 2`) as `VTYPE_INT`, and `ListValue::double` returns
+/// `0.0` for a non-double-typed slot. Read it as an int and widen, so integral
+/// values (a 2.0s subtitle delay, etc.) aren't silently dropped to zero.
+pub(crate) fn list_double(args: &ListValue, idx: usize) -> f64 {
+    let t = args.get_type(idx);
+    if t.as_ref() == &sys::cef_value_type_t::VTYPE_INT {
+        f64::from(args.int(idx))
+    } else {
+        args.double(idx)
+    }
+}
+
 pub(crate) fn send_to_renderer<F: FnOnce(&ListValue)>(frame: &Frame, name: &str, fill: F) {
     let Some(mut msg) = process_message_create(Some(&CefString::from(name))) else {
         return;

@@ -59,6 +59,8 @@ struct SettingsData {
     force_transcoding: bool,
     window_decorations: Option<WindowDecorations>,
     hide_scrollbar: bool,
+    rtx_vsr: bool,
+    rtx_hdr: bool,
 }
 
 impl Default for SettingsData {
@@ -77,6 +79,8 @@ impl Default for SettingsData {
             force_transcoding: false,
             window_decorations: None,
             hide_scrollbar: true,
+            rtx_vsr: false,
+            rtx_hdr: false,
         }
     }
 }
@@ -154,6 +158,12 @@ impl SettingsData {
         if let Some(b) = v.get("hideScrollbar").and_then(Value::as_bool) {
             self.hide_scrollbar = b;
         }
+        if let Some(b) = v.get("rtxVsr").and_then(Value::as_bool) {
+            self.rtx_vsr = b;
+        }
+        if let Some(b) = v.get("rtxHdr").and_then(Value::as_bool) {
+            self.rtx_hdr = b;
+        }
     }
 
     fn to_json(&self) -> Value {
@@ -220,6 +230,12 @@ impl SettingsData {
         if !self.hide_scrollbar {
             o.insert("hideScrollbar".into(), Value::Bool(false));
         }
+        if self.rtx_vsr {
+            o.insert("rtxVsr".into(), Value::Bool(true));
+        }
+        if self.rtx_hdr {
+            o.insert("rtxHdr".into(), Value::Bool(true));
+        }
         if !self.device_name.is_empty() {
             o.insert("deviceName".into(), Value::String(self.device_name.clone()));
         }
@@ -262,6 +278,8 @@ impl SettingsData {
         // windowDecorations is absent: resolving its effective value needs the
         // Platform default, unavailable in the CEF renderer where cli_json runs.
         o.insert("hideScrollbar".into(), Value::Bool(self.hide_scrollbar));
+        o.insert("rtxVsr".into(), Value::Bool(self.rtx_vsr));
+        o.insert("rtxHdr".into(), Value::Bool(self.rtx_hdr));
         if !self.device_name.is_empty() {
             o.insert("deviceName".into(), Value::String(self.device_name.clone()));
         }
@@ -547,6 +565,8 @@ pub fn titlebar_theme_color() -> bool {
     window_decorations_mode() == WindowDecorations::ServerThemed
 }
 bool_accessors!(hide_scrollbar, set_hide_scrollbar, hide_scrollbar);
+bool_accessors!(rtx_vsr, set_rtx_vsr, rtx_vsr);
+bool_accessors!(rtx_hdr, set_rtx_hdr, rtx_hdr);
 
 pub fn window_geometry() -> JfnWindowGeometry {
     state().lock().data.window
