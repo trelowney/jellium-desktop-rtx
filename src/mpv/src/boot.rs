@@ -11,6 +11,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::ptr;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::handle::Handle;
 use crate::sys;
@@ -60,6 +61,12 @@ pub struct JfnMpvBoot {
     /// the app's own client-side decorations don't stack under a compositor
     /// titlebar (e.g. KDE). No effect on X11 (WM draws decorations).
     pub client_side_decorations: bool,
+    /// Windows + NVIDIA RTX: enable RTX Video Super Resolution (AI upscale via
+    /// the `d3d11vpp` filter). Forces `hwdec=d3d11va`. Ignored off Windows.
+    pub rtx_vsr: bool,
+    /// Windows + NVIDIA RTX: enable RTX Video HDR (SDR->HDR via the `d3d11vpp`
+    /// filter). Forces `hwdec=d3d11va`. Ignored off Windows.
+    pub rtx_hdr: bool,
 }
 
 /// Owns the Handle for the rest of the process. `mpv_terminate_destroy`
@@ -150,7 +157,7 @@ fn apply_defaults(
     // (e.g. KDE) would stack on top of ours.
     let suppress_ssd = display == DisplayBackend::Wayland && client_side_decorations;
     set("border", if suppress_ssd { "no" } else { "yes" })?;
-    set("title", "Jellium Desktop")?;
+    set("title", "Jellium Desktop RTX")?;
     set("wayland-app-id", "net.nullsum.JelliumDesktop")?;
 
     // Keep window open when idle. `force-window=yes` (not "immediate")
@@ -201,6 +208,190 @@ fn apply_boot_options(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Resul
         && !ch.is_empty()
     {
         set("audio-channels", &ch)?;
+    }
+    // Applied last so it can override hwdec when RTX enhancement is enabled.
+    apply_rtx_video(handle, boot)?;
+    Ok(())
+}
+
+/// RTX video enhancement was requested in settings but skipped because no NVIDIA
+/// GPU is present (e.g. a laptop whose dGPU is switched off, leaving only an
+/// AMD/Intel iGPU). Recorded per feature so the web UI's Playback Info can show
+/// "Unsupported" instead of a misleading "On". Set during mpv init; read from the
+/// playback event thread. Default `false` on every platform.
+static RTX_SKIPPED_NO_GPU_VSR: AtomicBool = AtomicBool::new(false);
+static RTX_SKIPPED_NO_GPU_HDR: AtomicBool = AtomicBool::new(false);
+
+/// True if RTX VSR was enabled in settings but skipped for lack of an NVIDIA GPU.
+pub fn rtx_skipped_no_gpu_vsr() -> bool {
+    RTX_SKIPPED_NO_GPU_VSR.load(Ordering::Relaxed)
+}
+
+/// True if RTX HDR was enabled in settings but skipped for lack of an NVIDIA GPU.
+pub fn rtx_skipped_no_gpu_hdr() -> bool {
+    RTX_SKIPPED_NO_GPU_HDR.load(Ordering::Relaxed)
+}
+
+/// Outcome of probing DXGI for an NVIDIA GPU before enabling RTX video.
+#[cfg(target_os = "windows")]
+enum NvidiaProbe {
+    /// An NVIDIA adapter is present; the string is its DXGI description, used to
+    /// pin mpv's D3D11 device to it (`--d3d11-adapter`) so the RTX path renders on
+    /// the NVIDIA GPU even on a hybrid Optimus laptop whose desktop is composited
+    /// by the integrated GPU.
+    Found(String),
+    /// Enumeration succeeded with at least one hardware adapter, none NVIDIA —
+    /// e.g. a laptop whose NVIDIA dGPU is switched off, leaving only an AMD/Intel
+    /// iGPU. RTX is skipped so playback isn't degraded by a path the GPU can't do.
+    Absent,
+    /// DXGI couldn't be queried. **Fail-open**: proceed with RTX (don't pin), so a
+    /// working NVIDIA machine never loses RTX over a detection glitch.
+    Unknown,
+}
+
+/// Convert a `DXGI_ADAPTER_DESC1.Description` (NUL-terminated UTF-16) to a String.
+/// Mirrors mpv's own `mp_to_utf8(desc.Description)`, so the result is a valid
+/// prefix for mpv's case-insensitive `--d3d11-adapter` match against that adapter.
+#[cfg(target_os = "windows")]
+fn adapter_desc_to_string(desc: &[u16]) -> String {
+    let len = desc.iter().position(|&c| c == 0).unwrap_or(desc.len());
+    String::from_utf16_lossy(&desc[..len])
+}
+
+/// Enumerate DXGI adapters to decide whether RTX video should engage and, if so,
+/// which adapter to pin mpv to. Returns the NVIDIA adapter's description when one
+/// is present (so RTX is always routed to the NVIDIA GPU — including on an Optimus
+/// laptop with both an iGPU and a dGPU), `Absent` when only non-NVIDIA hardware is
+/// found, or `Unknown` (fail-open) when DXGI can't be queried.
+#[cfg(target_os = "windows")]
+fn probe_nvidia_adapter() -> NvidiaProbe {
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
+    };
+    const VENDOR_NVIDIA: u32 = 0x10DE;
+
+    let factory: IDXGIFactory1 = match unsafe { CreateDXGIFactory1() } {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(target: "mpv", "DXGI factory creation failed ({e:?}); proceeding without GPU pin");
+            return NvidiaProbe::Unknown;
+        }
+    };
+
+    let mut saw_hardware_adapter = false;
+    let mut index = 0u32;
+    loop {
+        // EnumAdapters1 returns DXGI_ERROR_NOT_FOUND past the last adapter.
+        let adapter = match unsafe { factory.EnumAdapters1(index) } {
+            Ok(a) => a,
+            Err(_) => break,
+        };
+        index += 1;
+        let desc = match unsafe { adapter.GetDesc1() } {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        // Skip the software/WARP renderer; it has no vendor GPU.
+        if desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+            continue;
+        }
+        saw_hardware_adapter = true;
+        if desc.VendorId == VENDOR_NVIDIA {
+            let name = adapter_desc_to_string(&desc.Description);
+            tracing::info!(target: "mpv", "NVIDIA adapter found: {name:?}; RTX will be pinned to it");
+            return NvidiaProbe::Found(name);
+        }
+    }
+
+    if saw_hardware_adapter {
+        tracing::info!(target: "mpv", "no NVIDIA adapter among DXGI hardware adapters; RTX enhancement will be skipped");
+        NvidiaProbe::Absent
+    } else {
+        // Couldn't enumerate any hardware adapter — don't second-guess; fail open.
+        tracing::warn!(target: "mpv", "no DXGI hardware adapters enumerated; proceeding without GPU pin");
+        NvidiaProbe::Unknown
+    }
+}
+
+/// Windows + NVIDIA RTX video enhancement via mpv's `d3d11vpp` filter:
+/// RTX Video Super Resolution (AI upscaling) and/or RTX Video HDR (SDR->HDR).
+/// Both consume D3D11 textures, so this overrides `hwdec` to `d3d11va`.
+/// Requires an RTX 20-series or newer GPU and a Windows mpv build.
+#[cfg(target_os = "windows")]
+fn apply_rtx_video(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<()> {
+    if !(boot.rtx_vsr || boot.rtx_hdr) {
+        return Ok(());
+    }
+
+    let set = |name: &str, value: &str| set_option_or_skip(handle, name, value);
+
+    // RTX VSR/HDR need an NVIDIA RTX GPU, so route the whole D3D11 pipeline to it.
+    match probe_nvidia_adapter() {
+        // No NVIDIA GPU present (e.g. a laptop whose dGPU is switched off, leaving
+        // only an AMD/Intel iGPU): forcing the d3d11vpp NVIDIA path and the HDR
+        // output hint would only degrade playback, so skip enhancement entirely
+        // and leave the pipeline at its defaults.
+        NvidiaProbe::Absent => {
+            RTX_SKIPPED_NO_GPU_VSR.store(boot.rtx_vsr, Ordering::Relaxed);
+            RTX_SKIPPED_NO_GPU_HDR.store(boot.rtx_hdr, Ordering::Relaxed);
+            tracing::info!(target: "mpv", "RTX VSR/HDR enabled in settings but no NVIDIA GPU detected; skipping (playback continues unmodified)");
+            return Ok(());
+        }
+        // NVIDIA GPU present: pin mpv's D3D11 device to it so RTX always renders on
+        // the NVIDIA GPU, including on a hybrid Optimus laptop whose desktop is
+        // composited by the iGPU. mpv case-insensitively prefix-matches this
+        // against the adapter description; the exact description we read selects it.
+        NvidiaProbe::Found(name) => {
+            set("d3d11-adapter", &name)?;
+        }
+        // GPU couldn't be determined: fail open — proceed with RTX unpinned, so a
+        // real NVIDIA system never loses RTX over a detection glitch.
+        NvidiaProbe::Unknown => {}
+    }
+
+    // The d3d11vpp filter only operates on D3D11 frames; software/other hwdec
+    // backends can't feed it, so force D3D11 hardware decoding.
+    set("hwdec", "d3d11va")?;
+
+    // Keep the whole chain (decode -> d3d11vpp -> output) on the D3D11 GPU API.
+    // On any other gpu-api the frames get copied off the NVIDIA D3D11 path and
+    // the RTX VSR/HDR extension never engages, so pin it explicitly.
+    set("gpu-api", "d3d11")?;
+
+    let mut parts: Vec<String> = Vec::new();
+    if boot.rtx_vsr {
+        parts.push("scaling-mode=nvidia".into());
+        // Fixed 2x upscale (ideal for 1080p->4K); mpv downscales to the display
+        // afterwards. Dynamic display-matched scaling is a possible follow-up.
+        parts.push("scale=2".into());
+    }
+    // Always give the VPP a defined 10-bit output format. Without it, a 10-bit
+    // HDR source (BT.2020 PQ / P010) pushed through a VSR-only chain — RTX HDR
+    // conversion off — is emitted in a format the renderer misreads, producing
+    // a green frame. A fixed x2bgr10 output lets mpv tone-map HDR->SDR itself
+    // (matching the stock client's behaviour on an SDR display) and is harmless
+    // for 8-bit SDR input. The true-HDR conversion stays gated on rtx_hdr below.
+    parts.push("format=x2bgr10".into());
+    if boot.rtx_hdr {
+        parts.push("nvidia-true-hdr".into());
+    }
+    let vf = format!("d3d11vpp={}", parts.join(":"));
+    set("vf", &vf)?;
+
+    if boot.rtx_hdr {
+        // Tell the display/compositor to switch to HDR for the HDR10 output.
+        set("target-colorspace-hint", "yes")?;
+    }
+
+    tracing::info!(target: "mpv", "RTX video enhancement enabled (vf={})", vf);
+    Ok(())
+}
+
+/// Off Windows the `d3d11vpp` filter does not exist; RTX VSR/HDR is a no-op.
+#[cfg(not(target_os = "windows"))]
+fn apply_rtx_video(_handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<()> {
+    if boot.rtx_vsr || boot.rtx_hdr {
+        tracing::warn!(target: "mpv", "RTX VSR/HDR requested but only supported on Windows; ignoring");
     }
     Ok(())
 }

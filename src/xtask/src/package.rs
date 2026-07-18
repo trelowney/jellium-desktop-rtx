@@ -112,6 +112,41 @@ fn zip_dir_with_root(parent: &Path, root_name: &str, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Convert a file modified time to a zip `DateTime`. ZIP stores a local-naive
+/// MS-DOS timestamp; we derive the calendar fields from the absolute time (UTC)
+/// with a dependency-free civil-from-days conversion (Howard Hinnant's
+/// algorithm). Returns `None` for instants the ZIP format can't represent
+/// (before 1980 or after 2107), so callers fall back to the default timestamp.
+fn zip_datetime(mtime: std::time::SystemTime) -> Option<zip::DateTime> {
+    let secs = mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    let hour = (tod / 3600) as u8;
+    let minute = ((tod % 3600) / 60) as u8;
+    let second = (tod % 60) as u8;
+
+    // Civil-from-days: days since 1970-01-01 -> (year, month, day).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097); // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u8; // [1, 31]
+    let month = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = yoe + era * 400 + i64::from(month <= 2);
+
+    if !(1980..=2107).contains(&year) {
+        return None;
+    }
+    // MS-DOS time has 2-second resolution; the constructor caps seconds at 58.
+    zip::DateTime::from_date_and_time(year as u16, month as u8, day, hour, minute, second.min(58))
+        .ok()
+}
+
 fn add_dir_to_zip<W: Write + Seek>(
     zw: &mut zip::ZipWriter<W>,
     src: &Path,
@@ -124,6 +159,18 @@ fn add_dir_to_zip<W: Write + Seek>(
         let rel = prefix.join(entry.file_name());
         let name = rel.to_string_lossy().replace('\\', "/");
         let ft = entry.file_type()?;
+        // Stamp every entry with its real modified time so the archive doesn't
+        // fall back to the zip epoch (1980-01-01, shown as 1979-12-31 in some
+        // timezones). symlink_metadata avoids following links; if the time can't
+        // be represented we keep the default timestamp.
+        let opts = match std::fs::symlink_metadata(&path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(zip_datetime)
+        {
+            Some(dt) => opts.last_modified_time(dt),
+            None => opts,
+        };
         if ft.is_dir() {
             zw.add_directory(format!("{name}/"), opts)?;
             add_dir_to_zip(zw, &path, &rel, opts)?;

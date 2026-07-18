@@ -312,7 +312,7 @@
         }
         canPlayItem(item) { return this.canPlayMediaType(item.MediaType); }
         supportsPlayMethod() { return true; }
-        static getSupportedFeatures() { return ['PlaybackRate', 'SetAspectRatio']; }
+        static getSupportedFeatures() { return ['PlaybackRate', 'SetAspectRatio', 'SubtitleOffset']; }
         supports(feature) { return mpvVideoPlayer.getSupportedFeatures().includes(feature); }
         isFullscreen() { return window._isFullscreen === true; }
         toggleFullscreen() {
@@ -334,7 +334,36 @@
 
         togglePictureInPicture() {}
         toggleAirPlay() {}
-        getStats() { return Promise.resolve({ categories: [] }); }
+        getStats() {
+            const categories = [];
+            // Windows + RTX: surface VSR/HDR in the Playback Info panel, each on
+            // its own row. Prefer mpv's real runtime outcome (pushed via
+            // _nativeRtxStatus); fall back to the configured setting when mpv
+            // hasn't reported yet. mpv only logs success at verbose, so without
+            // verbose logging an enabled feature shows as "On"; a GPU rejection
+            // is logged at warn and always surfaces as "Failed"/"Unsupported".
+            if (navigator.platform.startsWith('Win')) {
+                const pb = (window.jmpInfo && window.jmpInfo.settings && window.jmpInfo.settings.playback) || {};
+                const rt = window.__rtxStatus || {};
+                const label = (on, runtime) => {
+                    if (!on) return 'Off';
+                    switch (runtime) {
+                        case 'active':      return 'Active';
+                        case 'failed':      return 'Failed (GPU rejected)';
+                        case 'unsupported': return 'Unsupported';
+                        default:            return 'On';
+                    }
+                };
+                categories.push({
+                    name: 'RTX Video Enhancement',
+                    stats: [
+                        { label: 'RTX Video Super Resolution', value: label(!!pb.rtxVsr, rt.vsr) },
+                        { label: 'RTX Video HDR', value: label(!!pb.rtxHdr, rt.hdr) }
+                    ]
+                });
+            }
+            return Promise.resolve({ categories });
+        }
         getSupportedAspectRatios() {
             return [
                 { id: 'auto',  name: this.globalize.translate('Auto') },

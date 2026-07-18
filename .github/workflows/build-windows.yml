@@ -1,11 +1,11 @@
 name: build-windows
 
 on:
+  # Build ONLY on version tags (-> publishes a Release) or manual dispatch.
+  # No build on plain main pushes — avoids wasting Windows Actions minutes
+  # on runs that produce nothing downloadable.
   workflow_dispatch:
-  pull_request:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
 
@@ -15,6 +15,8 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -25,12 +27,6 @@ jobs:
             msystem: CLANG64
             pkg_prefix: mingw-w64-clang-x86_64
             triple: x86_64-pc-windows-msvc
-          - arch: arm64
-            runner: windows-11-arm
-            platform: windowsarm64
-            msystem: CLANGARM64
-            pkg_prefix: mingw-w64-clang-aarch64
-            triple: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -81,14 +77,64 @@ jobs:
           # etc.) get parsed against the wrong default target. Pin it.
           BINDGEN_EXTRA_CLANG_ARGS: --target=${{ matrix.triple }}
           MATRIX_ARCH: ${{ matrix.arch }}
+          # Embed the release tag so the in-app updater can compare exactly.
+          # Empty for non-tag runs, which disables the update check.
+          JFN_RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" %MATRIX_ARCH% || exit /b 1
           set "PATH=%PATH%;%MSYS_BIN%"
           cargo xtask package --external-mpv "%CD%\third_party\mpv-install" --prefix build/install --dist dist
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
+      # No upload-artifact: artifacts count toward Actions storage. The Release
+      # asset below is free storage and is the only download we need.
+      # Release notes = only this version's CHANGELOG section, not the whole file.
+      # Tag vYYYY.MM.DD[.N] -> heading "## YYYY-MM-DD[.N]" (date groups dashed,
+      # the optional .N suffix keeps its dot). Falls back to the full changelog
+      # if no matching section is found.
+      - name: Extract release notes for this tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          header=$(echo "$ver" | sed -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+)/\1-\2-\3/')
+          awk -v h="## $header" '
+            $0==h {f=1; next}
+            /^## / && f {exit}
+            f {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "warning: no changelog section for '## $header'; using full changelog" >&2
+            cp CHANGELOG.md RELEASE_NOTES.md
+          fi
+          echo "----- release notes for $GITHUB_REF_NAME -----"
+          cat RELEASE_NOTES.md
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
         with:
-          name: windows-${{ matrix.arch }}
-          path: dist/JelliumDesktop-*.zip
+          files: dist/JelliumDesktop-*.zip
+          fail_on_unmatched_files: true
+          body_path: RELEASE_NOTES.md
+
+  # Clean up after ourselves: the build creates Actions caches (CEF ~hundreds
+  # of MB + MSYS2 packages) that otherwise linger against the repo cache quota.
+  # Runs on a cheap Linux runner regardless of build outcome and deletes them.
+  cleanup-cache:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete all Actions caches for this repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          ids=$(gh api "repos/$REPO/actions/caches" --paginate --jq '.actions_caches[].id')
+          if [ -z "$ids" ]; then echo "No caches to delete."; exit 0; fi
+          for id in $ids; do
+            gh api --method DELETE "repos/$REPO/actions/caches/$id" && echo "deleted cache $id"
+          done

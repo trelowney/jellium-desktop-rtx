@@ -100,6 +100,26 @@ pub fn run(args: &BuildArgs) -> Result<()> {
     let bin_dst = out.join(bin_name);
     xfs::copy_file(&bin_src, &bin_dst)?;
 
+    // Build + stage the self-update side-car next to the app (Windows only). It's
+    // a separate `-p` invocation because it lives in its own package and shares
+    // none of the app's CEF/mpv build env.
+    if cfg!(target_os = "windows") {
+        let mut up = Command::new("cargo");
+        up.arg("build")
+            .arg("--release")
+            .arg("-p")
+            .arg("jfn-updater")
+            .arg("--manifest-path")
+            .arg(&manifest)
+            .env("CARGO_TARGET_DIR", &target_dir);
+        let up_status = up.status().context("spawn cargo build (updater)")?;
+        if !up_status.success() {
+            bail!("cargo build (updater) failed");
+        }
+        let updater = "jellium-desktop-rtx-updater.exe";
+        xfs::copy_file(&target_dir.join("release").join(updater), &out.join(updater))?;
+    }
+
     crate::platform::stage_cef(&out, &cef_info)?;
     crate::platform::stage_mpv(&out, &mpv_info, used_external_mpv, &bin_dst)?;
     Ok(())

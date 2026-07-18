@@ -64,6 +64,7 @@ pub(crate) enum NativeFunction {
     CsdReady,
     MenuItemSelected,
     MenuDismissed,
+    ApplyUpdate,
 }
 
 impl NativeFunction {
@@ -114,6 +115,7 @@ impl NativeFunction {
             "csdReady" => Self::CsdReady,
             "menuItemSelected" => Self::MenuItemSelected,
             "menuDismissed" => Self::MenuDismissed,
+            "applyUpdate" => Self::ApplyUpdate,
             _ => return None,
         })
     }
@@ -165,6 +167,7 @@ impl NativeFunction {
             Self::CsdReady => "csdReady",
             Self::MenuItemSelected => "menuItemSelected",
             Self::MenuDismissed => "menuDismissed",
+            Self::ApplyUpdate => "applyUpdate",
         }
     }
 }
@@ -256,6 +259,7 @@ const WEB_FUNCTIONS: &[NativeFunction] = &[
     NativeFunction::ThemeColor,
     NativeFunction::SetOsdVisible,
     NativeFunction::ToggleFullscreen,
+    NativeFunction::ApplyUpdate,
 ];
 
 const WEB_SCRIPTS: &[InjectedScript] = &[
