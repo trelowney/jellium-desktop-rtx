@@ -3,6 +3,14 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## Unreleased
+
+### Added
+- **Buffer Size is back** (Settings → Playback). Jellyfin Media Player let you pick how much of the stream to buffer ahead; jellium-desktop dropped the setting, leaving mpv's built-in default. It's selectable again from **32 MB to 4 GB**, default **256 MB**. Takes effect on restart. The buffer is **strictly byte-bound** — it reads ahead until the chosen number of megabytes is buffered (in RAM), no matter how many seconds of playback that is. mpv limits readahead by time as well as by bytes and stops at whichever comes first, so both time limits are pushed out of the way: `cache-secs` (10s by default, governs seekable streams) and `demuxer-readahead-secs` (1s by default, governs live/non-seekable ones); the cache is also forced on for every stream, not just network ones. Only the forward buffer is changed — mpv's backward buffer keeps its default so a large setting can't quietly double memory use.
+
+### Changed
+- **Re-synced onto upstream jellium-desktop `f3ba9cd`** (was `1272c89`). CEF stays at `150.0.0`. Upstream's work here is almost entirely Wayland/Linux (compositor layer rework, scale/extent state machine, `<select>` popups, client-side key repeat) plus an internal refactor that moves window sizing out of the boot path — none of it touches the Windows RTX path. The in-app CEF version shown in Playback Info and `--version` is now read from the libcef actually loaded at runtime instead of the version compiled against.
+
 ## 2026-07-18
 
 ### Changed

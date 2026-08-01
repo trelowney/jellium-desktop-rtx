@@ -1,10 +1,10 @@
 # Jellium Desktop RTX
 
-A personal fork of [**jellyfin/jellyfin-desktop**](https://github.com/jellyfin/jellyfin-desktop) (the CEF + mpv desktop client) that adds **NVIDIA RTX video enhancement** for playback.
+A personal fork of [**jellium-desktop**](https://github.com/andrewrabert/jellium-desktop) (the CEF + mpv desktop client, formerly Jellyfin Desktop) that adds **NVIDIA RTX video enhancement** for playback.
 
 > [!NOTE]
 > Unofficial fork for personal use. For the official, multi-platform client use
-> [jellyfin/jellyfin-desktop](https://github.com/jellyfin/jellyfin-desktop).
+> [andrewrabert/jellium-desktop](https://github.com/andrewrabert/jellium-desktop).
 
 ## What's different from upstream
 
@@ -13,6 +13,7 @@ A personal fork of [**jellyfin/jellyfin-desktop**](https://github.com/jellyfin/j
   - Both are driven through mpv's `d3d11vpp` filter and are **toggleable in the client settings** (see below). Enabling either forces `hwdec=d3d11va` + `gpu-api=d3d11` so the RTX path actually engages.
 - **Playback Info shows RTX status** — RTX VSR and RTX HDR are reported separately, so you can see whether each is applied.
 - **Separate data directory** — stores settings/cache/logs under `jellium-desktop-rtx`, so it won't clash with an installed stock jellyfin-desktop. On first run it **migrates settings from the stock install** (if present), so you don't have to log in / reconfigure.
+- **Buffer size is configurable** — Settings → Playback lets you pick how much of the stream to buffer ahead (32 MB – 4 GB, default 256 MB), the setting Jellyfin Media Player had and upstream dropped.
 - **Distinct branding** — green icon and "Jellium Desktop RTX" title, so it's obvious which build is running.
 - **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-06-26 (<commit>) · base jellyfin-desktop 3.0.0-dev@865e186`, so you always know the build date and which upstream commit it was made from.
 
@@ -56,6 +57,6 @@ See the upstream repo for local build instructions.
 
 ## Credits / license
 
-Based on [jellyfin/jellyfin-desktop](https://github.com/jellyfin/jellyfin-desktop)
+Based on [andrewrabert/jellium-desktop](https://github.com/andrewrabert/jellium-desktop)
 and licensed under the same terms (GPLv2). All credit for the client itself goes
 to the Jellyfin project; this fork only adds the RTX integration described above.

@@ -66,6 +66,14 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
     };
     match key {
         "hwdec" => jfn_config::set_hwdec(value),
+        // Arrives as a decimal MiB string from the settings <select>; the
+        // config setter clamps, so a stale or hand-edited value can't escape
+        // the supported range.
+        "cacheSize" => jfn_config::set_cache_size_mb(
+            value
+                .parse::<i32>()
+                .unwrap_or(jfn_config::CACHE_SIZE_MB_DEFAULT),
+        ),
         "rtxVsr" => jfn_config::set_rtx_vsr(value == "true"),
         "rtxHdr" => jfn_config::set_rtx_hdr(value == "true"),
         "audioPassthrough" => jfn_config::set_audio_passthrough(value),
