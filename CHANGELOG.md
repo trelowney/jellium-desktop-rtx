@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-08-01.1
+
+### Fixed
+- **The updater window is in English.** The self-updater side-car had its window title, progress phases ("Downloading…", "Installing the update…", "Done — starting the app…") and every error message hardcoded in Czech, which nobody outside one machine could read. All of it is English now, matching the rest of the app. (The side-car that performs *this* update is the one already installed, so the Czech text shows one last time; from this build on it's English.)
+
 ## 2026-08-01
 
 ### Added
