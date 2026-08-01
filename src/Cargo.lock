@@ -2244,7 +2244,6 @@ dependencies = [
  "jfn-paths",
  "jfn-platform-abi",
  "jfn-playback",
- "libc",
  "parking_lot",
  "serde_json",
  "slotmap",
@@ -2266,9 +2265,9 @@ version = "0.1.0-dev"
 name = "jfn-config"
 version = "0.1.0-dev"
 dependencies = [
+ "gethostname",
  "jfn-paths",
  "jfn-platform-abi",
- "libc",
  "parking_lot",
  "serde_json",
 ]
@@ -2278,7 +2277,7 @@ name = "jfn-gpu-paint"
 version = "0.1.0-dev"
 dependencies = [
  "ash",
- "libc",
+ "nix",
  "parking_lot",
  "pollster",
  "raw-window-handle",
@@ -2311,8 +2310,8 @@ dependencies = [
  "clap",
  "jfn-input",
  "jfn-platform-abi",
- "libc",
  "libloading 0.9.0",
+ "nix",
  "parking_lot",
  "tracing",
  "xkbcommon",
@@ -2323,7 +2322,7 @@ dependencies = [
 name = "jfn-logging"
 version = "0.1.0-dev"
 dependencies = [
- "libc",
+ "nix",
  "parking_lot",
  "time",
  "tracing",
@@ -2346,6 +2345,7 @@ dependencies = [
  "jfn-platform-abi",
  "jfn-playback",
  "libc",
+ "nix",
  "objc2",
  "objc2-foundation",
  "parking_lot",
@@ -2391,7 +2391,6 @@ version = "0.1.0-dev"
 dependencies = [
  "bindgen",
  "jfn-color",
- "libc",
  "parking_lot",
  "pkg-config",
  "tracing",
@@ -2411,6 +2410,7 @@ version = "0.1.0-dev"
 dependencies = [
  "cef",
  "libc",
+ "nix",
  "parking_lot",
 ]
 
@@ -2419,6 +2419,7 @@ name = "jfn-playback"
 version = "0.1.0-dev"
 dependencies = [
  "jfn-mpv",
+ "jfn-platform-abi",
  "jfn-wake-event",
  "parking_lot",
  "serde_json",
@@ -2446,7 +2447,6 @@ dependencies = [
  "jfn-wayland",
  "jfn-windows",
  "jfn-x11",
- "libc",
  "parking_lot",
  "serde_json",
  "tracing",
@@ -2466,7 +2466,7 @@ dependencies = [
 name = "jfn-wake-event"
 version = "0.1.0-dev"
 dependencies = [
- "libc",
+ "nix",
  "windows-sys 0.61.2",
 ]
 
@@ -2488,8 +2488,10 @@ dependencies = [
  "libc",
  "libloading 0.9.0",
  "memmap2",
+ "nix",
  "parking_lot",
  "smithay-client-toolkit",
+ "thiserror",
  "tracing",
  "wayland-backend",
  "wayland-client",
@@ -2547,6 +2549,7 @@ dependencies = [
  "jfn-playback",
  "jfn-wake-event",
  "libc",
+ "nix",
  "parking_lot",
  "tracing",
  "x11rb",
@@ -2874,6 +2877,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "nix"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "74523f3a35e05aba87a1d978330aef40f67b0304ac79c1c00b294c9830543db6"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+ "memoffset",
 ]
 
 [[package]]

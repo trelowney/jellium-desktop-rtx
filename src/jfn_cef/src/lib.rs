@@ -22,7 +22,9 @@ pub mod sink_routing;
 mod state;
 mod updater;
 mod v8_handler;
+pub mod version;
 pub mod window_controls;
+mod window_sync;
 
 pub use client::{BeforeCloseFn, ContextBuilderFn, ContextDispatcherFn, CreatedFn, JfnCefLayer};
 pub use ffi::*;
@@ -31,12 +33,4 @@ pub const APP_VERSION: &str = env!("JFN_APP_VERSION");
 pub const APP_VERSION_FULL: &str = env!("JFN_APP_VERSION_FULL");
 /// Release tag this build was produced from (CI), or "" for local builds.
 pub const APP_RELEASE_TAG: &str = env!("JFN_RELEASE_TAG");
-pub const APP_CEF_VERSION: &str = {
-    match std::ffi::CStr::from_bytes_with_nul(cef::sys::CEF_VERSION) {
-        Ok(s) => match s.to_str() {
-            Ok(s) => s,
-            Err(_) => "unknown",
-        },
-        Err(_) => "unknown",
-    }
-};
+pub use version::cef_version;

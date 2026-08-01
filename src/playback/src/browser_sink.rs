@@ -11,27 +11,15 @@ use serde_json::json;
 use crate::exec_js::call as call_exec_js;
 use crate::types::{PlaybackEvent, PlaybackEventKind};
 
-type SetSizeCb = extern "C" fn(i32, i32, i32, i32);
 type SetHzCb = extern "C" fn(f64);
 
 struct Handlers {
-    set_size: Option<SetSizeCb>,
     set_hz: Option<SetHzCb>,
 }
 
 fn slot() -> &'static Mutex<Handlers> {
     static SLOT: OnceLock<Mutex<Handlers>> = OnceLock::new();
-    SLOT.get_or_init(|| {
-        Mutex::new(Handlers {
-            set_size: None,
-            set_hz: None,
-        })
-    })
-}
-
-/// Install / clear the browsers.setSize handler.
-pub fn jfn_playback_set_browsers_size_handler(cb: Option<SetSizeCb>) {
-    slot().lock().set_size = cb;
+    SLOT.get_or_init(|| Mutex::new(Handlers { set_hz: None }))
 }
 
 /// Install / clear the browsers.setRefreshRate handler.
@@ -96,11 +84,6 @@ pub(crate) fn deliver(ev: &PlaybackEvent) {
                 "window._nativeFullscreenChanged({})",
                 if snap.fullscreen { "true" } else { "false" }
             ));
-        }
-        PlaybackEventKind::OsdDimsChanged => {
-            if let Some(cb) = slot().lock().set_size {
-                cb(snap.layout_w, snap.layout_h, snap.pixel_w, snap.pixel_h);
-            }
         }
         PlaybackEventKind::DisplayHzChanged => {
             if let Some(cb) = slot().lock().set_hz {
