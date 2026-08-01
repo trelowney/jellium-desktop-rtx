@@ -1,21 +1,21 @@
 //! Wayland backend impl of [`jfn_platform_abi::Platform`].
 //!
-//! Each method forwards to the existing Rust `wl_*` / `jfn_wl_*` helpers
-//! (mostly `crate::wl_ops` + `crate::wl_ffi`). The factory returns the
-//! concrete type; `jfn_app_main` boxes it as `Box<dyn Platform>` before
-//! handing it to `jfn_platform_abi::install`.
+//! This is the crate's ABI adapter: raw pointers, `c_int` dimensions, and
+//! opaque `SurfaceHandle`s from the Platform trait are converted here into
+//! the crate's domain types before reaching any internal module. The factory
+//! returns the concrete type; `jfn_app_main` boxes it as `Box<dyn Platform>`
+//! before handing it to `jfn_platform_abi::install`.
 
 #![allow(non_snake_case)]
 // Platform trait carries raw-pointer args (dmabuf info, accel-paint info)
 // from CEF; trait impls forward them unchanged to unsafe FFI fns.
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
-#[cfg(feature = "kde-palette")]
-use std::ffi::c_char;
 use std::ffi::{c_int, c_void};
-use std::os::fd::FromRawFd;
+use std::os::fd::BorrowedFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::layer::{Present, PresentError};
 use crate::wl_ops::{self, JfnDmabufFrame};
 
 use jfn_platform_abi::cursor::CursorShape;
@@ -23,16 +23,6 @@ pub use jfn_platform_abi::{
     BootGeometry, DisplayBackend, IdleInhibitLevel, JfnContextMenuRequest, JfnPopupRequest,
     JfnRect, Platform, SurfaceHandle, SurfaceSize, WindowDecorations,
 };
-
-// =====================================================================
-// External symbols
-// =====================================================================
-
-#[cfg(feature = "kde-palette")]
-use crate::kde_palette::{jfn_wl_kde_palette_post_window_cleanup, jfn_wl_kde_palette_set_color};
-use crate::lifecycle::{jfn_wl_lifecycle_cleanup, jfn_wl_lifecycle_init};
-use crate::scale_probe::jfn_wayland_scale_probe;
-use crate::window_state::jfn_wl_get_cached_scale;
 
 // =====================================================================
 // Helpers
@@ -44,6 +34,17 @@ const BG_R: u8 = 0x10;
 const BG_G: u8 = 0x10;
 const BG_B: u8 = 0x10;
 
+/// A skip is not a failure: only a real error maps to `false`.
+fn present_ok(result: Result<Present, PresentError>) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "wayland: present rejected");
+            false
+        }
+    }
+}
+
 pub(crate) unsafe fn to_dmabuf_frame(info: *const c_void) -> Option<JfnDmabufFrame> {
     let info = info as *const cef::sys::_cef_accelerated_paint_info_t;
     if info.is_null() {
@@ -51,19 +52,10 @@ pub(crate) unsafe fn to_dmabuf_frame(info: *const c_void) -> Option<JfnDmabufFra
     }
     let info = unsafe { &*info };
     let plane0 = &info.planes[0];
-    let dup_fd = unsafe { libc::dup(plane0.fd) };
-    if dup_fd < 0 {
-        return None;
-    }
-    let id = {
-        let mut st: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstat(dup_fd, &mut st) } == 0 {
-            Some((st.st_dev as u64, st.st_ino as u64))
-        } else {
-            None
-        }
-    };
-    let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(dup_fd) };
+    let fd = nix::unistd::dup(unsafe { BorrowedFd::borrow_raw(plane0.fd) }).ok()?;
+    let id = nix::sys::stat::fstat(&fd)
+        .ok()
+        .map(|st| (st.st_dev, st.st_ino));
     Some(JfnDmabufFrame {
         fd,
         id,
@@ -105,22 +97,35 @@ impl Platform for WaylandPlatform {
         DisplayBackend::Wayland
     }
 
+    /// A preference among the available options only — availability itself is
+    /// protocol-derived in [`Self::window_decoration_options`].
     fn default_window_decorations(&self) -> WindowDecorations {
         jfn_linux_util::default_window_decorations()
     }
 
+    fn window_decoration_options(&self) -> jfn_platform_abi::DecorationOptions {
+        let globals = crate::decoration_probe::globals();
+        jfn_platform_abi::DecorationOptions::with_server(
+            cfg!(feature = "kde-palette") && globals.kde_palette,
+        )
+    }
+
+    fn early_init(&self) {
+        crate::decoration_probe::init();
+    }
+
     fn init(&self, _mpv: *mut c_void) -> bool {
-        jfn_wl_lifecycle_init()
+        crate::lifecycle::init()
     }
 
     fn cleanup(&self) {
-        jfn_wl_lifecycle_cleanup();
+        crate::lifecycle::cleanup();
     }
 
     fn post_window_cleanup(&self) {
         crate::mpv_host::stop_proxy();
         #[cfg(feature = "kde-palette")]
-        jfn_wl_kde_palette_post_window_cleanup();
+        crate::kde_palette::post_window_cleanup();
     }
 
     fn alloc_surface(&self) -> SurfaceHandle {
@@ -135,7 +140,10 @@ impl Platform for WaylandPlatform {
         let Some(frame) = (unsafe { to_dmabuf_frame(info) }) else {
             return false;
         };
-        wl_ops::surface_present(s as *mut crate::wl_state::PlatformSurface, &frame)
+        present_ok(wl_ops::surface_present(
+            s as *mut crate::wl_state::PlatformSurface,
+            frame,
+        ))
     }
 
     fn surface_present_software(
@@ -154,13 +162,13 @@ impl Platform for WaylandPlatform {
             .and_then(|n| n.checked_mul(4));
         let Some(len) = len else { return false };
         let pixels = unsafe { std::slice::from_raw_parts(buffer as *const u8, len) };
-        wl_ops::surface_present_software(
+        present_ok(wl_ops::surface_present_software(
             s as *mut crate::wl_state::PlatformSurface,
             dirty,
             pixels,
             w,
             h,
-        )
+        ))
     }
 
     fn surface_set_visible(&self, s: SurfaceHandle, visible: bool) {
@@ -206,8 +214,8 @@ impl Platform for WaylandPlatform {
         jfn_linux_util::cef_paths()
     }
 
-    fn window_source(&self) -> Option<&'static dyn jfn_platform_abi::WindowSource> {
-        Some(&crate::window_source::WaylandWindowSource)
+    fn window_source(&self) -> &'static dyn jfn_platform_abi::WindowSource {
+        &crate::window_source::WaylandWindowSource
     }
 
     // Wayland owns its toplevel and sizes it in apply_boot_geometry, so mpv
@@ -227,31 +235,31 @@ impl Platform for WaylandPlatform {
     }
 
     fn set_fullscreen(&self, v: bool) {
-        crate::wl_ffi::jfn_wl_set_fullscreen(v);
+        crate::root_window::set_fullscreen(v);
     }
 
     fn toggle_fullscreen(&self) {
-        crate::wl_ffi::jfn_wl_toggle_fullscreen();
+        crate::root_window::toggle_fullscreen();
     }
 
     fn window_minimize(&self) {
-        crate::wl_ffi::jfn_wl_window_minimize();
+        crate::root_window::set_minimized();
     }
 
     fn window_toggle_maximize(&self) {
-        crate::wl_ffi::jfn_wl_window_toggle_maximize();
+        crate::root_window::toggle_maximize();
     }
 
     fn window_start_move(&self) {
-        crate::wl_ffi::jfn_wl_window_start_move();
+        crate::root_window::start_move();
     }
 
     fn window_start_resize(&self, edge: c_int) {
-        crate::wl_ffi::jfn_wl_window_start_resize(edge);
+        crate::root_window::start_resize(edge as u32);
     }
 
     fn get_scale(&self) -> f32 {
-        jfn_wl_get_cached_scale()
+        crate::window_state::cached_scale()
     }
 
     fn effective_scale(&self, _mpv_display_hidpi_scale: f64) -> f32 {
@@ -259,8 +267,8 @@ impl Platform for WaylandPlatform {
     }
 
     fn get_display_scale(&self, x: c_int, y: c_int) -> f32 {
-        let s = jfn_wayland_scale_probe(x, y);
-        if s > 0.0 { s as f32 } else { 1.0 }
+        crate::scale_probe::probe_scale(crate::scale_probe::ProbeTarget::Point { x, y })
+            .map_or(1.0, |s| s.ratio_f32())
     }
 
     fn apply_boot_geometry(&self, g: &BootGeometry) {
@@ -297,18 +305,18 @@ impl Platform for WaylandPlatform {
             hex[5] = hexdigit((b >> 4) & 0xF);
             hex[6] = hexdigit(b & 0xF);
             hex[7] = 0;
-            unsafe {
-                jfn_wl_kde_palette_set_color(r, g, b, hex.as_ptr() as *const c_char);
+            if let Ok(hex) = std::ffi::CStr::from_bytes_with_nul(&hex) {
+                crate::kde_palette::set_color(r, g, b, hex);
             }
         }
     }
 
     fn window_decorations_supported(&self) -> bool {
-        true
+        self.window_decoration_options().has_choice()
     }
 
-    fn theme_color_supported(&self) -> bool {
-        cfg!(feature = "kde-palette")
+    fn effective_decorations(&self) -> jfn_platform_abi::EffectiveDecorations {
+        crate::root_window::effective_decorations()
     }
 
     fn shared_texture_supported(&self) -> bool {

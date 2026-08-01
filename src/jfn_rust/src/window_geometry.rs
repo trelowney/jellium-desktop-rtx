@@ -5,10 +5,7 @@
 
 use std::sync::OnceLock;
 
-use jfn_platform_abi::{
-    BootGeometry, LogicalSize, PhysicalSize, Platform, Scale, WindowExtent, WindowGeometry,
-    WindowSnapshot, WindowSource,
-};
+use jfn_platform_abi::{BootGeometry, LogicalSize, Platform, Scale, WindowGeometry, WindowSource};
 
 use jfn_config::JfnWindowGeometry;
 
@@ -18,25 +15,6 @@ fn plat() -> &'static dyn Platform {
     jfn_platform_abi::get()
 }
 
-struct MpvWindowSource;
-
-impl WindowSource for MpvWindowSource {
-    fn snapshot(&self) -> WindowSnapshot {
-        let size = jfn_playback::ingest_driver::jfn_playback_window_size()
-            .or_else(jfn_playback::ingest_driver::jfn_playback_osd_size);
-        let extent =
-            size.map(|(w, h)| WindowExtent::new(PhysicalSize { w, h }, Scale(plat().get_scale())));
-        WindowSnapshot {
-            extent,
-            position: plat().query_window_position(),
-            maximized: jfn_playback::ingest_driver::jfn_playback_window_maximized(),
-            fullscreen: jfn_playback::ingest_driver::jfn_playback_fullscreen(),
-        }
-    }
-}
-
-static MPV_SOURCE: MpvWindowSource = MpvWindowSource;
-
 /// Owns the boot→live→persist lifecycle for window geometry.
 pub struct WindowGeometryController {
     source: &'static dyn WindowSource,
@@ -45,7 +23,7 @@ pub struct WindowGeometryController {
 impl WindowGeometryController {
     fn new() -> Self {
         Self {
-            source: plat().window_source().unwrap_or(&MPV_SOURCE),
+            source: plat().window_source(),
         }
     }
 
@@ -133,7 +111,7 @@ fn geometry_to_persist(
         return None;
     }
     let scale = ext.scale().or_one();
-    let logical = physical.to_logical(scale);
+    let logical = ext.logical();
     Some(JfnWindowGeometry {
         width: physical.w,
         height: physical.h,
@@ -149,7 +127,7 @@ fn geometry_to_persist(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use jfn_platform_abi::WindowPos;
+    use jfn_platform_abi::{PhysicalSize, WindowExtent, WindowPos, WindowSnapshot};
 
     struct FakeWindowSource {
         size: Option<PhysicalSize>,

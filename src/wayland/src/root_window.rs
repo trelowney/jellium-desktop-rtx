@@ -1,6 +1,9 @@
 use std::ffi::c_void;
 use std::num::{NonZeroI32, NonZeroU64};
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+
+use nix::errno::Errno;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
@@ -13,7 +16,7 @@ use wayland_client::protocol::{
     wl_buffer::WlBuffer, wl_compositor::WlCompositor, wl_registry::WlRegistry, wl_seat::WlSeat,
     wl_shm::WlShm, wl_shm_pool::WlShmPool, wl_surface::WlSurface,
 };
-use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
 use wayland_protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
     wp_fractional_scale_v1::{self, WpFractionalScaleV1},
@@ -38,7 +41,7 @@ use wayland_protocols_plasma::server_decoration_palette::client::{
     org_kde_kwin_server_decoration_palette_manager::OrgKdeKwinServerDecorationPaletteManager,
 };
 
-use jfn_platform_abi::WindowDecorations;
+use jfn_platform_abi::{EffectiveDecorations, WindowDecorations};
 
 const APP_ID: &str = "net.nullsum.JelliumDesktop";
 const TITLE: &str = "Jellium Desktop";
@@ -58,10 +61,67 @@ const STATE_TILED_RIGHT: u32 = 6;
 const STATE_TILED_TOP: u32 = 7;
 const STATE_TILED_BOTTOM: u32 = 8;
 
-static WANT_CSD: AtomicBool = AtomicBool::new(false);
+/// The user's explicit decoration preference; `Auto` sends no `set_mode`, so
+/// the compositor's preferred mode (delivered in the decoration configure)
+/// decides.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[repr(u8)]
+enum DecorationRequest {
+    Auto = 0,
+    ClientSide = 1,
+    ServerSide = 2,
+}
 
-pub(crate) fn set_decorations(mode: WindowDecorations) {
-    WANT_CSD.store(matches!(mode, WindowDecorations::Csd), Ordering::Release);
+static DECORATION_REQUEST: AtomicU8 = AtomicU8::new(DecorationRequest::Auto as u8);
+
+fn decoration_request() -> DecorationRequest {
+    match DECORATION_REQUEST.load(Ordering::Acquire) {
+        v if v == DecorationRequest::ClientSide as u8 => DecorationRequest::ClientSide,
+        v if v == DecorationRequest::ServerSide as u8 => DecorationRequest::ServerSide,
+        _ => DecorationRequest::Auto,
+    }
+}
+
+pub(crate) fn set_decorations(configured: Option<WindowDecorations>) {
+    let request = match configured {
+        None => DecorationRequest::Auto,
+        Some(WindowDecorations::Csd) => DecorationRequest::ClientSide,
+        Some(_) => DecorationRequest::ServerSide,
+    };
+    DECORATION_REQUEST.store(request as u8, Ordering::Release);
+}
+
+/// The decoration mode in effect. `ClientSide` until a decoration configure
+/// — or, absent the decoration protocol, an explicit server-side request —
+/// grants otherwise.
+struct EffectiveState(AtomicU8);
+
+impl EffectiveState {
+    fn encode(mode: EffectiveDecorations) -> u8 {
+        match mode {
+            EffectiveDecorations::ClientSide => 0,
+            EffectiveDecorations::ServerSide => 1,
+        }
+    }
+
+    fn load(&self) -> EffectiveDecorations {
+        if self.0.load(Ordering::Acquire) == Self::encode(EffectiveDecorations::ServerSide) {
+            EffectiveDecorations::ServerSide
+        } else {
+            EffectiveDecorations::ClientSide
+        }
+    }
+
+    /// Returns true when the stored value changed.
+    fn store(&self, mode: EffectiveDecorations) -> bool {
+        self.0.swap(Self::encode(mode), Ordering::AcqRel) != Self::encode(mode)
+    }
+}
+
+static EFFECTIVE: EffectiveState = EffectiveState(AtomicU8::new(0));
+
+pub(crate) fn effective_decorations() -> EffectiveDecorations {
+    EFFECTIVE.load()
 }
 
 static BOOT_W: AtomicU32 = AtomicU32::new(DEFAULT_W as u32);
@@ -115,12 +175,20 @@ struct RootState {
     suspended: bool,
     floating: FloatingRestore,
     pending_ack: Option<ConfigureSerial>,
-    scale_known: bool,
     /// `Some` once the first configure has been acked (the window is "mapped").
     /// Holds the capability that gates buffer attach/commit.
     present: Option<Presented>,
+    scale_discovery: ScaleDiscovery,
     pre_fs_maximized: bool,
 }
+
+/// Upper bound on the fallback probe: it round-trips on a second display
+/// connection, which a wedged compositor can stall forever.
+const SCALE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Set by the fallback probe thread once it has fed a scale; the root loop
+/// re-plans presentation when it observes this.
+static SCALE_FALLBACK_FED: AtomicBool = AtomicBool::new(false);
 
 mod floating_restore {
     use crate::window_state::{WindowMode, WindowSize};
@@ -167,26 +235,128 @@ mod present_cap {
 }
 use present_cap::{ConfigureSerial, Presented};
 
-fn resolve_logical_size(
-    pending: (Option<NonZeroI32>, Option<NonZeroI32>),
-    cur: Option<crate::window_state::WindowSize>,
-    floating: Option<crate::window_state::WindowSize>,
-    mode: crate::window_state::WindowMode,
-) -> Option<crate::window_state::WindowSize> {
-    let pick =
-        |pending: Option<NonZeroI32>, cur: Option<i32>, floating: Option<i32>| -> Option<i32> {
-            if let Some(p) = pending {
-                Some(p.get())
-            } else if mode.uses_floating_restore() {
-                floating
-            } else {
-                cur
+/// Pure presentation state machine. Given what the root window currently
+/// knows — mapped or not, pending configure or not, scale known or not, and
+/// the resolvable logical size — [`presentation::plan`] decides the next step.
+/// All Wayland I/O and cross-subsystem notifications stay in the effect layer
+/// ([`RootState::try_present`] / [`RootState::execute_present`]).
+mod presentation {
+    use std::num::NonZeroI32;
+
+    use crate::window_state::{WindowMode, WindowSize};
+
+    /// Everything `plan` needs, free of protocol objects so it is unit-testable.
+    #[derive(Clone, Copy)]
+    pub(super) struct Inputs {
+        /// A configure has been acked before (the window is mapped).
+        pub(super) mapped: bool,
+        /// An unacked configure is pending.
+        pub(super) pending_ack: bool,
+        pub(super) scale_known: bool,
+        pub(super) size: Option<WindowSize>,
+    }
+
+    /// Progress of the deferred first-configure scale fallback.
+    ///
+    /// Ordering, per compositor style:
+    /// - Normal compositors send `preferred_scale` before or alongside the
+    ///   first configure. The scale is known when the configure dispatches,
+    ///   `plan` never returns `DiscoverScale`, and this stays `Idle`.
+    /// - Hyprland-style compositors withhold `preferred_scale` until the
+    ///   window maps — which never happens while the first buffer waits on the
+    ///   scale. The configure handler then requests discovery (`Requested`),
+    ///   but the probe is NOT run inside the callback: the root loop first
+    ///   finishes dispatching the current event batch, so a `preferred_scale`
+    ///   queued later in the same batch wins and dissolves the request. Only
+    ///   if the scale is still unknown after the drain does the loop spawn the
+    ///   bounded off-thread probe (`Spawned`), which feeds a provisional scale
+    ///   (or the unit fallback) back through `window_state` and wakes the root
+    ///   thread to present. The authoritative `preferred_scale` corrects it
+    ///   after map.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum ScaleDiscovery {
+        Idle,
+        Requested,
+        Spawned,
+    }
+
+    impl ScaleDiscovery {
+        /// `plan` chose [`Step::DiscoverScale`] inside an event callback: only
+        /// note the request; never probe here.
+        pub(super) fn request(self) -> Self {
+            match self {
+                Self::Idle => Self::Requested,
+                other => other,
             }
-        };
-    let w = pick(pending.0, cur.map(|s| s.w()), floating.map(|s| s.w()))?;
-    let h = pick(pending.1, cur.map(|s| s.h()), floating.map(|s| s.h()))?;
-    crate::window_state::WindowSize::new(w, h)
+        }
+
+        /// The event batch is drained: decide whether the probe must actually
+        /// run. A scale that arrived meanwhile dissolves the request; a spawned
+        /// probe is never re-spawned.
+        pub(super) fn after_batch_drained(self, scale_known: bool) -> (Self, bool) {
+            match self {
+                Self::Requested if scale_known => (Self::Idle, false),
+                Self::Requested => (Self::Spawned, true),
+                other => (other, false),
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum Step {
+        /// Nothing presentable: no configure yet, or no resolvable size.
+        Wait,
+        /// A first configure is waiting but no scale is known; scale discovery
+        /// must run, then planning re-runs.
+        DiscoverScale,
+        /// Ack (if a configure is pending), update geometry, and request the
+        /// root commit.
+        Present,
+    }
+
+    pub(super) fn plan(i: Inputs) -> Step {
+        // Never commit a buffer before acking a configure (protocol violation);
+        // before the first map that means waiting for one.
+        if !i.pending_ack && !i.mapped {
+            return Step::Wait;
+        }
+        if !i.scale_known {
+            // Scale can only be missing before the first map; after map the
+            // compositor has spoken (or the fallback already fed one).
+            return if i.mapped {
+                Step::Wait
+            } else {
+                Step::DiscoverScale
+            };
+        }
+        if i.size.is_none() {
+            return Step::Wait;
+        }
+        Step::Present
+    }
+
+    pub(super) fn resolve_logical_size(
+        pending: (Option<NonZeroI32>, Option<NonZeroI32>),
+        cur: Option<WindowSize>,
+        floating: Option<WindowSize>,
+        mode: WindowMode,
+    ) -> Option<WindowSize> {
+        let pick =
+            |pending: Option<NonZeroI32>, cur: Option<i32>, floating: Option<i32>| -> Option<i32> {
+                if let Some(p) = pending {
+                    Some(p.get())
+                } else if mode.uses_floating_restore() {
+                    floating
+                } else {
+                    cur
+                }
+            };
+        let w = pick(pending.0, cur.map(|s| s.w()), floating.map(|s| s.w()))?;
+        let h = pick(pending.1, cur.map(|s| s.h()), floating.map(|s| s.h()))?;
+        WindowSize::new(w, h)
+    }
 }
+use presentation::{ScaleDiscovery, resolve_logical_size};
 
 impl RootState {
     fn resolve_logical(&self) -> Option<crate::window_state::WindowSize> {
@@ -198,15 +368,75 @@ impl RootState {
         )
     }
 
+    /// Effect layer around the pure [`presentation::plan`]: gathers inputs and
+    /// runs the decided step's Wayland I/O and notifications. May run inside an
+    /// event callback, so it must never block — scale discovery is only
+    /// requested here and serviced by the root loop between dispatch batches.
     fn try_present(&mut self) {
-        // Never commit a buffer before acking a configure (protocol violation);
-        // before the first map that means waiting for one.
-        if self.pending_ack.is_none() && self.present.is_none() {
+        let step = presentation::plan(presentation::Inputs {
+            mapped: self.present.is_some(),
+            pending_ack: self.pending_ack.is_some(),
+            scale_known: crate::window_state::known_scale().is_some(),
+            size: self.resolve_logical(),
+        });
+        match step {
+            presentation::Step::Wait => {}
+            presentation::Step::DiscoverScale => {
+                self.scale_discovery = self.scale_discovery.request();
+            }
+            presentation::Step::Present => self.execute_present(),
+        }
+    }
+
+    /// Runs on the root loop after `dispatch_pending` has drained the current
+    /// event batch. If a `preferred_scale` arrived later in that batch the
+    /// request dissolves; otherwise spawn the bounded off-thread probe. See
+    /// [`ScaleDiscovery`] for the full ordering contract.
+    fn service_scale_discovery(&mut self) {
+        let (next, spawn) = self
+            .scale_discovery
+            .after_batch_drained(crate::window_state::known_scale().is_some());
+        self.scale_discovery = next;
+        if !spawn {
             return;
         }
-        if !self.scale_known {
-            return;
+        let spawned = thread::Builder::new()
+            .name("wl-scale-fallback".into())
+            .spawn(|| {
+                match crate::scale_probe::probe_scale_bounded(
+                    crate::scale_probe::ProbeTarget::FirstOutput,
+                    SCALE_PROBE_TIMEOUT,
+                ) {
+                    Ok(scale) => {
+                        tracing::info!(
+                            target: "Main",
+                            "root window: no preferred_scale before first configure; using probed scale {scale}"
+                        );
+                        crate::window_state::feed_scale(
+                            scale,
+                            crate::window_state::ScaleProvenance::Provisional,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "Main",
+                            "root window: no preferred_scale before first configure and probe failed ({e}); assuming scale 1.0"
+                        );
+                        crate::window_state::feed_unit_scale();
+                    }
+                }
+                SCALE_FALLBACK_FED.store(true, Ordering::Release);
+                wake_root_thread();
+            })
+            .is_ok();
+        if !spawned {
+            // No thread, no probe: unblock presentation with the unit fallback.
+            crate::window_state::feed_unit_scale();
+            self.try_present();
         }
+    }
+
+    fn execute_present(&mut self) {
         let Some(size) = self.resolve_logical() else {
             return;
         };
@@ -238,8 +468,8 @@ impl RootState {
 
         // Pass logical (not physical) size: mpv and the overlay apply scale
         // themselves, so a physical size here would double-scale.
-        crate::mpv_proxy::set_window_size(w, h);
-        crate::window_state::publish(w, h, self.mode);
+        crate::mpv_proxy::set_window_size(size);
+        crate::window_state::publish(size, self.mode);
 
         PENDING_PRESENT.store(true, Ordering::Release);
     }
@@ -447,6 +677,21 @@ pub(crate) fn set_maximized(on: bool) {
     push_command(WindowCommand::SetMaximized(on));
 }
 
+// Commanded maximize state for the CSD toggle button. Mirrored from the
+// compositor on every configure so a compositor-initiated maximize doesn't
+// desync the toggle.
+static MAXIMIZED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn toggle_maximize() {
+    let next = !MAXIMIZED.load(Ordering::Relaxed);
+    MAXIMIZED.store(next, Ordering::Relaxed);
+    set_maximized(next);
+}
+
+pub(crate) fn sync_maximized_command_state(maximized: bool) {
+    MAXIMIZED.store(maximized, Ordering::Relaxed);
+}
+
 pub(crate) fn set_minimized() {
     push_command(WindowCommand::Minimize);
 }
@@ -534,8 +779,8 @@ fn build_menu_positioner(shell: &PopupShell, x: i32, y: i32, w: i32, h: i32) -> 
 }
 
 /// Create the grab popup for `surface`. The grab cites the input thread's last
-/// button serial — valid here only because every app connection shares one
-/// wl_client.
+/// press serial (button or key) — valid here only because every app connection
+/// shares one wl_client.
 pub(crate) fn popup_create(
     generation: NonZeroU64,
     x: i32,
@@ -571,7 +816,7 @@ pub(crate) fn popup_create(
     );
     positioner.destroy();
     if let Some(seat) = &shell.seat {
-        popup.grab(seat, crate::input::last_button_serial());
+        popup.grab(seat, crate::input::last_input_serial());
     }
     surface.commit();
     shell.flush();
@@ -781,30 +1026,34 @@ pub(crate) fn ensure_started() {
     let frac_scale = frac_mgr
         .as_ref()
         .map(|m| m.get_fractional_scale(&surface, &qh, ()));
-    let scale_known_at_boot = frac_mgr.is_none();
-    if scale_known_at_boot {
+    if frac_mgr.is_none() {
         // No preferred_scale will ever arrive, so satisfy the boot scale gate —
         // otherwise it waits forever.
         tracing::warn!(target: "Main", "root window: no wp_fractional_scale_manager_v1; assuming scale 1.0");
         crate::window_state::feed_unit_scale();
     }
 
-    // Request server/client-side decorations to match the configured mode.
-    // Without an explicit request a compositor's default (KWin: server-side,
-    // sway: none) leaves the window with no titlebar.
     let deco_mgr: Option<ZxdgDecorationManagerV1> = globals.bind(&qh, 1..=1, ()).ok();
     let decoration = deco_mgr.as_ref().map(|mgr| {
         let dec = mgr.get_toplevel_decoration(&toplevel, &qh, ());
-        let mode = if WANT_CSD.load(Ordering::Acquire) {
-            DecorationMode::ClientSide
-        } else {
-            DecorationMode::ServerSide
-        };
-        dec.set_mode(mode);
+        match decoration_request() {
+            DecorationRequest::ClientSide => dec.set_mode(DecorationMode::ClientSide),
+            DecorationRequest::ServerSide => dec.set_mode(DecorationMode::ServerSide),
+            // No set_mode: the compositor's preferred mode arrives in the
+            // decoration configure, which we obey either way.
+            DecorationRequest::Auto => {}
+        }
         dec
     });
     if deco_mgr.is_none() {
-        tracing::warn!(target: "Main", "root window: no zxdg_decoration_manager_v1");
+        if decoration_request() == DecorationRequest::ServerSide {
+            tracing::warn!(target: "Main", "root window: no zxdg_decoration_manager_v1; server-side requested, drawing no titlebar");
+            if EFFECTIVE.store(EffectiveDecorations::ServerSide) {
+                jfn_platform_abi::notify_decorations_changed();
+            }
+        } else {
+            tracing::warn!(target: "Main", "root window: no zxdg_decoration_manager_v1; client-side decorations");
+        }
     }
 
     #[cfg(feature = "kde-palette")]
@@ -863,7 +1112,7 @@ pub(crate) fn ensure_started() {
         },
         pending_ack: None,
         present: None,
-        scale_known: scale_known_at_boot,
+        scale_discovery: ScaleDiscovery::Idle,
         pre_fs_maximized: false,
     };
 
@@ -941,6 +1190,14 @@ fn root_loop(
         if queue.dispatch_pending(&mut state).is_err() {
             break;
         }
+        // The batch is drained: a preferred_scale queued behind the configure
+        // has dispatched by now, so only a genuinely absent scale spawns the
+        // fallback probe — and a completed probe re-plans presentation here,
+        // on the thread that owns the surface.
+        if SCALE_FALLBACK_FED.swap(false, Ordering::AcqRel) {
+            state.try_present();
+        }
+        state.service_scale_discovery();
         // Service queued control work before the blocking poll, not only after a
         // wake: wake_root_thread is a no-op until ROOT_THREAD is published, so a
         // request stored during that startup window rings no fd and would
@@ -958,32 +1215,36 @@ fn root_loop(
         }
         let _ = conn.flush();
 
+        // A probe completion between the check above and here must not strand
+        // its result until the next compositor event (its wake can be lost if
+        // ROOT_THREAD isn't published yet); re-run the loop instead of polling.
+        if SCALE_FALLBACK_FED.load(Ordering::Acquire) {
+            continue;
+        }
         let guard = match queue.prepare_read() {
             Some(g) => g,
             None => continue,
         };
         let mut pfds = [
-            libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: wake_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
+            PollFd::new(unsafe { BorrowedFd::borrow_raw(fd) }, PollFlags::POLLIN),
+            PollFd::new(
+                unsafe { BorrowedFd::borrow_raw(wake_fd) },
+                PollFlags::POLLIN,
+            ),
         ];
-        let r = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as _, -1) };
-        if r < 0 {
-            let err = std::io::Error::last_os_error();
-            drop(guard);
-            if err.kind() == std::io::ErrorKind::Interrupted {
+        match poll(&mut pfds, PollTimeout::NONE) {
+            Err(Errno::EINTR) => {
+                drop(guard);
                 continue;
             }
-            break;
+            Err(_) => {
+                drop(guard);
+                break;
+            }
+            Ok(_) => {}
         }
-        if pfds[0].revents & libc::POLLIN != 0 {
+        let revents = |i: usize| pfds[i].revents().unwrap_or(PollFlags::empty());
+        if revents(0).contains(PollFlags::POLLIN) {
             if guard.read().is_err() {
                 break;
             }
@@ -995,10 +1256,10 @@ fn root_loop(
         } else {
             drop(guard);
         }
-        if pfds[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+        if revents(0).intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
             break;
         }
-        if pfds[1].revents & libc::POLLIN != 0 {
+        if revents(1).contains(PollFlags::POLLIN) {
             wake.drain();
             if stop.load(Ordering::Relaxed) {
                 break;
@@ -1107,8 +1368,13 @@ impl Dispatch<WpFractionalScaleV1, ()> for RootState {
         _: &QueueHandle<Self>,
     ) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
-            state.scale_known = true;
-            crate::window_state::feed_scale(scale as i32);
+            let Some(scale) = crate::scale::Scale120::from_wire(scale) else {
+                return;
+            };
+            crate::window_state::feed_scale(
+                scale,
+                crate::window_state::ScaleProvenance::Authoritative,
+            );
             // Scale arrives without a configure (output change, or the first
             // scale completing a withheld configure), so drive a present here too.
             state.try_present();
@@ -1198,11 +1464,22 @@ impl Dispatch<ZxdgToplevelDecorationV1, ()> for RootState {
     fn event(
         _: &mut Self,
         _: &ZxdgToplevelDecorationV1,
-        _: zxdg_toplevel_decoration_v1::Event,
+        event: zxdg_toplevel_decoration_v1::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let zxdg_toplevel_decoration_v1::Event::Configure { mode } = event {
+            let effective = match mode {
+                WEnum::Value(DecorationMode::ClientSide) => EffectiveDecorations::ClientSide,
+                WEnum::Value(DecorationMode::ServerSide) => EffectiveDecorations::ServerSide,
+                _ => return,
+            };
+            if EFFECTIVE.store(effective) {
+                tracing::info!(target: "Main", "decorations: compositor set {effective:?}");
+                jfn_platform_abi::notify_decorations_changed();
+            }
+        }
     }
 }
 
@@ -1245,10 +1522,334 @@ impl Dispatch<WlRegistry, GlobalListContents> for RootState {
 }
 
 #[cfg(test)]
+mod model_tests {
+    //! Model-driven suite for the root-window startup/scale state machine.
+    //! [`Model`] mirrors the effect layer exactly — every decision routes
+    //! through the same pure functions the live code uses (`plan`,
+    //! `ScaleDiscovery::{request, after_batch_drained}`, `scale_displaces`) —
+    //! while recording effects (acks, commits, probe spawns) for assertion.
+
+    use super::presentation::{Inputs, ScaleDiscovery, Step, plan};
+    use crate::window_state::{ScaleProvenance, WindowSize, scale_displaces};
+
+    struct Model {
+        mapped: bool,
+        pending_ack: bool,
+        scale: Option<ScaleProvenance>,
+        discovery: ScaleDiscovery,
+        acks: u32,
+        commits: u32,
+        probe_spawns: u32,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Ev {
+        /// xdg_surface.configure dispatches (toplevel size/states precede it).
+        Configure,
+        /// wp_fractional_scale.preferred_scale dispatches.
+        PreferredScale,
+        /// dispatch_pending returned: the current batch is fully drained.
+        BatchDrained,
+        /// The bounded fallback probe fed a provisional scale (probe result or
+        /// unit fallback — identical control flow).
+        ProbeCompletes,
+        /// Boot found no wp_fractional_scale_manager_v1.
+        BootUnitScale,
+    }
+
+    impl Model {
+        fn new() -> Self {
+            Self {
+                mapped: false,
+                pending_ack: false,
+                scale: None,
+                discovery: ScaleDiscovery::Idle,
+                acks: 0,
+                commits: 0,
+                probe_spawns: 0,
+            }
+        }
+
+        fn feed(&mut self, incoming: ScaleProvenance) {
+            if scale_displaces(self.scale, incoming) {
+                self.scale = Some(incoming);
+            }
+        }
+
+        /// Mirrors `RootState::try_present`.
+        fn drive(&mut self) {
+            let step = plan(Inputs {
+                mapped: self.mapped,
+                pending_ack: self.pending_ack,
+                scale_known: self.scale.is_some(),
+                // The boot floating size is always recorded, so a floating
+                // root always resolves; size-resolution corner cases are
+                // covered by the resolve_logical_size tests.
+                size: WindowSize::new(1280, 720),
+            });
+            match step {
+                Step::Wait => {}
+                Step::DiscoverScale => self.discovery = self.discovery.request(),
+                Step::Present => {
+                    // Protocol invariant: buffer operations only ever follow a
+                    // configure ack (fresh here, or the one that mapped us).
+                    assert!(
+                        self.pending_ack || self.mapped,
+                        "present without any acked configure"
+                    );
+                    if self.pending_ack {
+                        self.pending_ack = false;
+                        self.acks += 1;
+                        self.mapped = true;
+                    }
+                    // One latch raise = exactly one root commit per transaction.
+                    self.commits += 1;
+                }
+            }
+        }
+
+        fn ev(&mut self, e: Ev) {
+            match e {
+                Ev::Configure => {
+                    self.pending_ack = true;
+                    self.drive();
+                }
+                Ev::PreferredScale => {
+                    self.feed(ScaleProvenance::Authoritative);
+                    self.drive();
+                }
+                Ev::BatchDrained => {
+                    let (next, spawn) = self.discovery.after_batch_drained(self.scale.is_some());
+                    self.discovery = next;
+                    if spawn {
+                        self.probe_spawns += 1;
+                    }
+                }
+                Ev::ProbeCompletes => {
+                    self.feed(ScaleProvenance::Provisional);
+                    self.drive();
+                }
+                Ev::BootUnitScale => self.feed(ScaleProvenance::Provisional),
+            }
+        }
+
+        fn run(&mut self, evs: &[Ev]) {
+            for &e in evs {
+                self.ev(e);
+            }
+        }
+    }
+
+    #[test]
+    fn preferred_scale_before_configure() {
+        let mut m = Model::new();
+        m.run(&[Ev::PreferredScale]);
+        // Scale alone must not touch the surface before the first configure.
+        assert_eq!(m.commits, 0);
+        m.run(&[Ev::Configure, Ev::BatchDrained]);
+        assert_eq!((m.acks, m.commits, m.probe_spawns), (1, 1, 0));
+        assert_eq!(m.discovery, ScaleDiscovery::Idle);
+    }
+
+    #[test]
+    fn preferred_scale_later_in_same_batch_wins_without_probe() {
+        let mut m = Model::new();
+        m.run(&[Ev::Configure]);
+        // Mid-batch: the callback only requested discovery — it must not probe.
+        assert_eq!(m.discovery, ScaleDiscovery::Requested);
+        assert_eq!(m.commits, 0);
+        m.run(&[Ev::PreferredScale, Ev::BatchDrained]);
+        assert_eq!((m.acks, m.commits, m.probe_spawns), (1, 1, 0));
+        assert_eq!(m.discovery, ScaleDiscovery::Idle);
+    }
+
+    #[test]
+    fn withheld_scale_probes_after_drain_then_authoritative_corrects() {
+        let mut m = Model::new();
+        m.run(&[Ev::Configure, Ev::BatchDrained]);
+        // Hyprland style: nothing else in the batch, so exactly one probe.
+        assert_eq!(m.probe_spawns, 1);
+        assert_eq!(m.commits, 0);
+        m.run(&[Ev::ProbeCompletes]);
+        assert_eq!((m.acks, m.commits), (1, 1));
+        assert_eq!(m.scale, Some(ScaleProvenance::Provisional));
+        // The authoritative scale after map displaces the provisional one and
+        // re-presents without a new configure (and without a new ack).
+        m.run(&[Ev::PreferredScale]);
+        assert_eq!(m.scale, Some(ScaleProvenance::Authoritative));
+        assert_eq!((m.acks, m.commits), (1, 2));
+    }
+
+    #[test]
+    fn probe_failure_presents_with_unit_fallback() {
+        // A failed probe feeds the unit scale through the identical path, so
+        // startup still completes.
+        let mut m = Model::new();
+        m.run(&[Ev::Configure, Ev::BatchDrained, Ev::ProbeCompletes]);
+        assert_eq!((m.acks, m.commits), (1, 1));
+        assert_eq!(m.scale, Some(ScaleProvenance::Provisional));
+    }
+
+    #[test]
+    fn late_probe_result_never_clobbers_authoritative_scale() {
+        let mut m = Model::new();
+        m.run(&[
+            Ev::Configure,
+            Ev::BatchDrained,
+            Ev::PreferredScale,
+            Ev::ProbeCompletes,
+        ]);
+        assert_eq!(m.scale, Some(ScaleProvenance::Authoritative));
+    }
+
+    #[test]
+    fn no_fractional_scale_manager_uses_unit_scale_without_discovery() {
+        let mut m = Model::new();
+        m.run(&[Ev::BootUnitScale, Ev::Configure, Ev::BatchDrained]);
+        assert_eq!((m.acks, m.commits, m.probe_spawns), (1, 1, 0));
+        assert_eq!(m.discovery, ScaleDiscovery::Idle);
+    }
+
+    #[test]
+    fn repeated_unchanged_scales_re_present_without_new_ack_or_probe() {
+        let mut m = Model::new();
+        m.run(&[Ev::PreferredScale, Ev::Configure, Ev::BatchDrained]);
+        m.run(&[Ev::PreferredScale, Ev::PreferredScale, Ev::BatchDrained]);
+        assert_eq!((m.acks, m.commits, m.probe_spawns), (1, 3, 0));
+    }
+
+    #[test]
+    fn output_migration_scale_without_configure_re_presents() {
+        let mut m = Model::new();
+        m.run(&[Ev::PreferredScale, Ev::Configure, Ev::BatchDrained]);
+        // Moving to another output delivers only a new preferred_scale.
+        m.run(&[Ev::PreferredScale, Ev::BatchDrained]);
+        assert_eq!((m.acks, m.commits), (1, 2));
+    }
+
+    #[test]
+    fn bare_configure_ack_after_map() {
+        let mut m = Model::new();
+        m.run(&[Ev::PreferredScale, Ev::Configure, Ev::BatchDrained]);
+        // A size-less configure (states-only change) still acks and commits.
+        m.run(&[Ev::Configure, Ev::BatchDrained]);
+        assert_eq!((m.acks, m.commits), (2, 2));
+    }
+
+    #[test]
+    fn pending_fallback_never_respawns_and_never_blocks_shutdown() {
+        let mut m = Model::new();
+        m.run(&[Ev::Configure, Ev::BatchDrained]);
+        assert_eq!(m.probe_spawns, 1);
+        // The probe never completes (wedged compositor): further drains must
+        // not spawn again — the loop stays free to exit at shutdown, and the
+        // orphaned probe thread owns only its private connection.
+        m.run(&[Ev::BatchDrained, Ev::BatchDrained]);
+        assert_eq!(m.probe_spawns, 1);
+        assert_eq!(m.discovery, ScaleDiscovery::Spawned);
+        assert_eq!(m.commits, 0);
+    }
+
+    #[test]
+    fn callbacks_never_spawn_probes() {
+        // Spawning happens only on BatchDrained, whatever callbacks arrive.
+        let mut m = Model::new();
+        m.run(&[
+            Ev::Configure,
+            Ev::Configure,
+            Ev::PreferredScale,
+            Ev::Configure,
+        ]);
+        assert_eq!(m.probe_spawns, 0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    use super::presentation::{Inputs, ScaleDiscovery, Step, plan};
     use super::resolve_logical_size;
     use crate::window_state::{WindowMode, WindowSize};
     use std::num::NonZeroI32;
+
+    #[test]
+    fn discovery_request_is_idempotent_and_never_downgrades() {
+        assert_eq!(ScaleDiscovery::Idle.request(), ScaleDiscovery::Requested);
+        assert_eq!(
+            ScaleDiscovery::Requested.request(),
+            ScaleDiscovery::Requested
+        );
+        // A spawned probe must not be re-requested by later configures.
+        assert_eq!(ScaleDiscovery::Spawned.request(), ScaleDiscovery::Spawned);
+    }
+
+    #[test]
+    fn discovery_batch_drain_transitions() {
+        assert_eq!(
+            ScaleDiscovery::Requested.after_batch_drained(true),
+            (ScaleDiscovery::Idle, false)
+        );
+        assert_eq!(
+            ScaleDiscovery::Requested.after_batch_drained(false),
+            (ScaleDiscovery::Spawned, true)
+        );
+        for known in [false, true] {
+            assert_eq!(
+                ScaleDiscovery::Idle.after_batch_drained(known),
+                (ScaleDiscovery::Idle, false)
+            );
+            assert_eq!(
+                ScaleDiscovery::Spawned.after_batch_drained(known),
+                (ScaleDiscovery::Spawned, false)
+            );
+        }
+    }
+
+    fn inputs(mapped: bool, pending_ack: bool, scale_known: bool, size: bool) -> Inputs {
+        Inputs {
+            mapped,
+            pending_ack,
+            scale_known,
+            size: size.then(|| WindowSize::new(1280, 720).unwrap()),
+        }
+    }
+
+    #[test]
+    fn no_configure_and_unmapped_waits() {
+        // Whatever else is known, nothing may happen before the first configure.
+        for scale_known in [false, true] {
+            for size in [false, true] {
+                assert_eq!(plan(inputs(false, false, scale_known, size)), Step::Wait);
+            }
+        }
+    }
+
+    #[test]
+    fn first_configure_without_scale_discovers() {
+        for size in [false, true] {
+            assert_eq!(plan(inputs(false, true, false, size)), Step::DiscoverScale);
+        }
+    }
+
+    #[test]
+    fn mapped_without_scale_waits_instead_of_probing() {
+        // After map the compositor owns the scale; a re-present must not probe.
+        assert_eq!(plan(inputs(true, true, false, true)), Step::Wait);
+        assert_eq!(plan(inputs(true, false, false, true)), Step::Wait);
+    }
+
+    #[test]
+    fn unresolvable_size_waits() {
+        assert_eq!(plan(inputs(false, true, true, false)), Step::Wait);
+        assert_eq!(plan(inputs(true, false, true, false)), Step::Wait);
+    }
+
+    #[test]
+    fn presents_once_configured_scaled_and_sized() {
+        assert_eq!(plan(inputs(false, true, true, true)), Step::Present);
+        assert_eq!(plan(inputs(true, true, true, true)), Step::Present);
+        // Re-present without a new configure (scale/size change after map).
+        assert_eq!(plan(inputs(true, false, true, true)), Step::Present);
+    }
 
     const NONE: (Option<NonZeroI32>, Option<NonZeroI32>) = (None, None);
 

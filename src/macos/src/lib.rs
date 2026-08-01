@@ -479,15 +479,12 @@ pub fn macos_wake_main_loop() {
 /// it completes. Work that does `DispatchQueue.main.sync` (e.g. mpv's VO
 /// uninit during TerminateDestroy) finishes without deadlocking main.
 pub fn macos_run_blocking(f: Box<dyn FnOnce() + Send>) {
-    unsafe extern "C" fn sigalrm_noop(_: std::ffi::c_int) {}
-    unsafe extern "C" {
-        fn signal(signum: std::ffi::c_int, handler: unsafe extern "C" fn(std::ffi::c_int))
-        -> usize;
-    }
+    extern "C" fn sigalrm_noop(_: std::ffi::c_int) {}
     let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let d2 = done.clone();
     let t = std::thread::spawn(move || {
-        unsafe { signal(libc::SIGALRM, sigalrm_noop) };
+        use nix::sys::signal::{SigHandler, Signal, signal};
+        let _ = unsafe { signal(Signal::SIGALRM, SigHandler::Handler(sigalrm_noop)) };
         f();
         d2.store(true, Ordering::Release);
         unsafe { CFRunLoopWakeUp(CFRunLoopGetMain()) };
@@ -767,6 +764,10 @@ impl Platform for MacosPlatform {
 
     fn get_display_scale(&self, x: c_int, y: c_int) -> f32 {
         macos_get_display_scale(x, y)
+    }
+
+    fn window_source(&self) -> &'static dyn jfn_platform_abi::WindowSource {
+        &jfn_playback::window_source::MPV_WINDOW_SOURCE
     }
 
     fn query_window_position(&self) -> Option<WindowPos> {

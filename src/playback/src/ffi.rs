@@ -43,8 +43,11 @@ fn coord_handle() -> Option<CoordinatorHandle> {
 }
 
 pub fn jfn_playback_init() {
-    let mut guard = coord_slot().lock();
-    if guard.is_none() {
+    {
+        let mut guard = coord_slot().lock();
+        if guard.is_some() {
+            return;
+        }
         let Some(mut c) = PlaybackCoordinator::new() else {
             eprintln!("[playback] failed to create coordinator (wake eventfd)");
             return;
@@ -53,6 +56,12 @@ pub fn jfn_playback_init() {
         c.start();
         *guard = Some(c);
     }
+    // The immediate reconcile is load-bearing: mode posts made before the
+    // coordinator existed were dropped by `post`, and no wakeup replays them.
+    jfn_platform_abi::subscribe_window_changed(
+        crate::ingest_driver::jfn_playback_reconcile_window_mode,
+    );
+    crate::ingest_driver::jfn_playback_reconcile_window_mode();
 }
 
 fn register_builtin_sinks(c: &PlaybackCoordinator) {
@@ -76,8 +85,10 @@ fn register_builtin_sinks(c: &PlaybackCoordinator) {
 }
 
 pub fn jfn_playback_shutdown() {
-    let mut guard = coord_slot().lock();
-    if let Some(mut c) = guard.take() {
+    // stop() joins the worker, whose sinks call post() → coord_slot;
+    // holding the guard across stop() deadlocks.
+    let coord = coord_slot().lock().take();
+    if let Some(mut c) = coord {
         c.stop();
     }
 }

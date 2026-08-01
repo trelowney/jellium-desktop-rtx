@@ -11,8 +11,8 @@
 
 use std::cell::RefCell;
 use std::ffi::CString;
-use std::os::fd::{AsRawFd, IntoRawFd, OwnedFd};
-use std::os::raw::{c_char, c_int};
+use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, OwnedFd};
+use std::os::raw::c_char;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use std::sync::mpsc;
@@ -20,6 +20,8 @@ use std::thread;
 
 use error_reporter::Report;
 use jfn_wake_event::WakeEvent;
+use nix::errno::Errno;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use parking_lot::Mutex;
 use wl_proxy::baseline::Baseline;
 use wl_proxy::client::{Client, ClientHandler};
@@ -73,7 +75,7 @@ static MPV_VIDEO_SURFACE_ID: AtomicU32 = AtomicU32::new(0);
 
 static APP_CLIENT_FD: AtomicI32 = AtomicI32::new(-1);
 
-pub fn app_client_fd() -> Option<c_int> {
+pub(crate) fn app_client_fd() -> Option<std::os::fd::RawFd> {
     let fd = APP_CLIENT_FD.load(Ordering::Acquire);
     (fd >= 0).then_some(fd)
 }
@@ -91,13 +93,11 @@ fn window_size() -> Option<WindowSize> {
 /// closed (and possibly reused) out from under it.
 static MPV_WAKE: Mutex<Option<WakeEvent>> = Mutex::new(None);
 
-pub fn set_window_size(w: c_int, h: c_int) {
-    if let Some(size) = WindowSize::new(w, h) {
-        CUR_W.store(size.w(), Ordering::Release);
-        CUR_H.store(size.h(), Ordering::Release);
-        WINDOW_SIZE_GEN.fetch_add(1, Ordering::AcqRel);
-        wake_mpv_thread();
-    }
+pub(crate) fn set_window_size(size: WindowSize) {
+    CUR_W.store(size.w(), Ordering::Release);
+    CUR_H.store(size.h(), Ordering::Release);
+    WINDOW_SIZE_GEN.fetch_add(1, Ordering::AcqRel);
+    wake_mpv_thread();
 }
 
 fn wake_mpv_thread() {
@@ -282,20 +282,13 @@ pub fn start() -> *mut Proxy {
 }
 
 fn socketpair_cloexec() -> std::io::Result<(OwnedFd, OwnedFd)> {
-    use std::os::fd::FromRawFd;
-    let mut fds = [0 as c_int; 2];
-    let rc = unsafe {
-        libc::socketpair(
-            libc::AF_UNIX,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC,
-            0,
-            fds.as_mut_ptr(),
-        )
-    };
-    if rc != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+    use nix::sys::socket::{AddressFamily, SockFlag, SockType, socketpair};
+    Ok(socketpair(
+        AddressFamily::Unix,
+        SockType::Stream,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )?)
 }
 
 /// Returns the WAYLAND_DISPLAY value clients should connect to (e.g. "wayland-1").
@@ -444,27 +437,27 @@ fn run_mpv_state(tx: mpsc::SyncSender<Result<CString, String>>, bridge: OwnedFd)
             return;
         }
         let mut pfds = [
-            libc::pollfd {
-                fd: poll_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: wake_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
+            PollFd::new(
+                unsafe { BorrowedFd::borrow_raw(poll_fd) },
+                PollFlags::POLLIN,
+            ),
+            PollFd::new(
+                unsafe { BorrowedFd::borrow_raw(wake_fd) },
+                PollFlags::POLLIN,
+            ),
         ];
-        let r = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as _, -1) };
-        if r < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::Interrupted {
-                continue;
+        match poll(&mut pfds, PollTimeout::NONE) {
+            Err(Errno::EINTR) => continue,
+            Err(err) => {
+                eprintln!("proxy: S_mpv poll: {err}");
+                return;
             }
-            eprintln!("proxy: S_mpv poll: {err}");
-            return;
+            Ok(_) => {}
         }
-        if pfds[1].revents & libc::POLLIN != 0 {
+        if pfds[1]
+            .revents()
+            .is_some_and(|r| r.contains(PollFlags::POLLIN))
+        {
             jfn_wake_event::drain_raw_fd(wake_fd);
         }
         if let Err(e) = state.dispatch_available() {

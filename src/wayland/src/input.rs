@@ -6,12 +6,17 @@
 //! fd. Input events come back to C++ as primitives via JfnInputCallbacks so
 //! no CEF-typed structs cross the FFI boundary.
 
+use nix::errno::Errno;
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+use nix::sys::time::TimeSpec;
+use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
 use parking_lot::Mutex;
 use std::ffi::{c_int, c_void};
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use memmap2::MmapOptions;
 use wayland_backend::client::Backend;
@@ -83,10 +88,39 @@ fn cef_to_wl_shape(shape: CursorShape) -> u32 {
     s as u32
 }
 
-static LAST_BUTTON_SERIAL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+// Interactive move/resize requires the serial of the pointer press whose
+// implicit grab drives the drag — a later key press serial would be rejected.
+static LAST_BUTTON_SERIAL: AtomicU32 = AtomicU32::new(0);
+// xdg_popup.grab accepts the serial of any press-type input event; tracking
+// key presses too keeps the serial fresh for keyboard-opened `<select>`s
+// (Enter/Space), which grab without any button press to cite.
+static LAST_INPUT_SERIAL: AtomicU32 = AtomicU32::new(0);
 
 pub fn last_button_serial() -> u32 {
-    LAST_BUTTON_SERIAL.load(std::sync::atomic::Ordering::Acquire)
+    LAST_BUTTON_SERIAL.load(Ordering::Acquire)
+}
+
+pub fn last_input_serial() -> u32 {
+    LAST_INPUT_SERIAL.load(Ordering::Acquire)
+}
+
+static SUPPRESSED_FOCUS_LOSS: AtomicBool = AtomicBool::new(false);
+static KB_FOCUS_CB: Mutex<Option<KbFocusFn>> = Mutex::new(None);
+
+fn suppress_focus_loss() {
+    SUPPRESSED_FOCUS_LOSS.store(true, Ordering::Release);
+}
+
+fn discard_suppressed_focus_loss() {
+    SUPPRESSED_FOCUS_LOSS.store(false, Ordering::Release);
+}
+
+pub(crate) fn flush_suppressed_focus_loss() {
+    if SUPPRESSED_FOCUS_LOSS.swap(false, Ordering::AcqRel)
+        && let Some(f) = *KB_FOCUS_CB.lock()
+    {
+        f(0);
+    }
 }
 
 pub type MouseMoveFn = fn(x: i32, y: i32, mods: u32, leave: c_int);
@@ -158,6 +192,11 @@ struct State {
     cursor_type: Arc<AtomicU32>,
 
     menu_focus: bool,
+
+    repeat_timer: TimerFd,
+    repeat_rate: i32,
+    repeat_delay: i32,
+    repeat_key: Option<u32>,
 }
 
 impl State {
@@ -204,6 +243,61 @@ impl State {
             dev.set_shape(self.pointer_serial, shape);
         }
     }
+
+    fn arm_repeat(&mut self, key: u32) {
+        if self.repeat_rate <= 0 {
+            self.disarm_repeat();
+            return;
+        }
+        self.repeat_key = Some(key);
+        // A zero start disarms the timer outright regardless of the
+        // interval, so a reported delay/rate of 0 must not reach 0ms.
+        let period_ms = (1000u32 / self.repeat_rate as u32).max(1);
+        let expiration = Expiration::IntervalDelayed(
+            ms_to_timespec(self.repeat_delay.max(1) as u32),
+            ms_to_timespec(period_ms),
+        );
+        let _ = self
+            .repeat_timer
+            .set(expiration, TimerSetTimeFlags::empty());
+    }
+
+    fn disarm_repeat(&mut self) {
+        self.repeat_key = None;
+        let _ = self.repeat_timer.unset();
+    }
+
+    fn send_key(&self, key: u32, kc: xkb::Keycode, sym: u32, pressed: bool) {
+        if let Some(f) = self.cb.key {
+            f(sym, key, self.modifiers, if pressed { 1 } else { 0 });
+        }
+        if pressed && let Some(st) = &self.xkb_st {
+            let cp = st.key_get_utf32(kc);
+            if cp > 0
+                && let Some(f) = self.cb.char_
+            {
+                f(cp, self.modifiers, key);
+            }
+        }
+    }
+
+    fn fire_key_repeat(&mut self) {
+        let Some(key) = self.repeat_key else { return };
+        // Don't leak a stale repeat into the main surface while a popup
+        // has the keyboard.
+        if crate::popup::active() {
+            self.disarm_repeat();
+            return;
+        }
+        let Some(st) = &self.xkb_st else { return };
+        let kc: xkb::Keycode = (key + 8).into();
+        let sym = st.key_get_one_sym(kc);
+        self.send_key(key, kc, sym.into(), true);
+    }
+}
+
+fn ms_to_timespec(ms: u32) -> TimeSpec {
+    TimeSpec::from_duration(Duration::from_millis(u64::from(ms)))
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
@@ -327,7 +421,8 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
             } => {
                 let pressed = matches!(bs, WEnum::Value(wl_pointer::ButtonState::Pressed));
                 if pressed {
-                    LAST_BUTTON_SERIAL.store(serial, std::sync::atomic::Ordering::Release);
+                    LAST_BUTTON_SERIAL.store(serial, Ordering::Release);
+                    LAST_INPUT_SERIAL.store(serial, Ordering::Release);
                 }
                 let flag = Self::mouse_button_flag(button);
                 if crate::popup::active() {
@@ -395,6 +490,7 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                 // Right-click arms the context menu; left-click arms a possible
                 // `<select>` dropdown (CEF tells us asynchronously if one opened).
                 if (button == BTN_RIGHT || button == BTN_LEFT) && pressed {
+                    state.disarm_repeat();
                     crate::popup::arm(state.ptr_x as i32, state.ptr_y as i32);
                 }
                 if pressed {
@@ -412,8 +508,14 @@ impl Dispatch<wl_pointer::WlPointer, ()> for State {
                     );
                 }
                 // Drop the grab armed on the press if this click opened no menu (#494).
-                if (button == BTN_RIGHT || button == BTN_LEFT) && !pressed {
-                    crate::popup::dismiss_if_speculative();
+                if (button == BTN_RIGHT || button == BTN_LEFT)
+                    && !pressed
+                    && crate::popup::dismiss_if_speculative()
+                {
+                    // The window still holds compositor focus here — teardown
+                    // returns the keyboard to the main surface, so a leave
+                    // swallowed at arm time was our own grab, not a real loss.
+                    discard_suppressed_focus_loss();
                 }
             }
             Event::Axis { axis, value, .. } => {
@@ -528,6 +630,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
                 if crate::popup::is_menu_surface(surface.id().protocol_id()) {
                     return;
                 }
+                discard_suppressed_focus_loss();
                 if let Some(f) = state.cb.kb_focus {
                     f(1);
                 }
@@ -541,39 +644,55 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
                     return;
                 }
                 if crate::popup::is_engaged() {
+                    suppress_focus_loss();
                     return;
                 }
+                // Stop repeating on real focus loss, or it keeps firing
+                // once focus returns to a different surface.
+                state.disarm_repeat();
                 if let Some(f) = state.cb.kb_focus {
                     f(0);
                 }
             }
-            Event::Key { key, state: ks, .. } => {
+            Event::Key {
+                key,
+                state: ks,
+                serial,
+                ..
+            } => {
+                let pressed = matches!(ks, WEnum::Value(wl_keyboard::KeyState::Pressed));
+                if pressed {
+                    LAST_INPUT_SERIAL.store(serial, Ordering::Release);
+                }
                 let Some(st) = &state.xkb_st else { return };
                 let kc: xkb::Keycode = (key + 8).into();
                 let sym = st.key_get_one_sym(kc);
-                let pressed = matches!(ks, WEnum::Value(wl_keyboard::KeyState::Pressed));
                 if crate::popup::active() {
+                    // Otherwise a repeat released here stays armed and
+                    // outlives the popup.
+                    if !pressed && state.repeat_key == Some(key) {
+                        state.disarm_repeat();
+                    }
                     crate::popup::handle_key(sym.into(), pressed);
                     return;
                 }
                 if pressed && is_context_menu_key(sym.into(), state.modifiers) {
+                    // popup::active() only flips true once the async
+                    // configure lands, so disarm now rather than rely on it.
+                    state.disarm_repeat();
                     crate::popup::arm(state.ptr_x as i32, state.ptr_y as i32);
                 }
-                if let Some(f) = state.cb.key {
-                    f(
-                        sym.into(),
-                        key,
-                        state.modifiers,
-                        if pressed { 1 } else { 0 },
-                    );
-                }
-                if pressed {
-                    let cp = st.key_get_utf32(kc);
-                    if cp > 0
-                        && let Some(f) = state.cb.char_
-                    {
-                        f(cp, state.modifiers, key);
-                    }
+                state.send_key(key, kc, sym.into(), pressed);
+
+                let repeats = state
+                    .xkb_kmap
+                    .as_ref()
+                    .map(|km| km.key_repeats(kc))
+                    .unwrap_or(false);
+                if pressed && repeats {
+                    state.arm_repeat(key);
+                } else if !pressed && state.repeat_key == Some(key) {
+                    state.disarm_repeat();
                 }
             }
             Event::Modifiers {
@@ -587,6 +706,10 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for State {
                     st.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
                 }
                 state.refresh_modifiers();
+            }
+            Event::RepeatInfo { rate, delay } => {
+                state.repeat_rate = rate;
+                state.repeat_delay = delay;
             }
             _ => {}
         }
@@ -629,7 +752,7 @@ impl Dispatch<wl_surface::WlSurface, ()> for State {
     }
 }
 
-pub struct JfnInputWayland {
+pub struct InputThread {
     cursor_type: Arc<AtomicU32>,
     set_cursor_inbox: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
@@ -648,6 +771,7 @@ fn worker_loop(
 ) {
     let display_fd = conn.as_fd().as_raw_fd();
     let wake_fd = wake.fd();
+    let repeat_fd = state.repeat_timer.as_fd().as_raw_fd();
     let qh = queue.handle();
     loop {
         // Apply any pending cursor change before we block.
@@ -668,38 +792,43 @@ fn worker_loop(
         };
 
         let mut pfds = [
-            libc::pollfd {
-                fd: display_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
-            libc::pollfd {
-                fd: wake_fd,
-                events: libc::POLLIN,
-                revents: 0,
-            },
+            PollFd::new(
+                unsafe { BorrowedFd::borrow_raw(display_fd) },
+                PollFlags::POLLIN,
+            ),
+            PollFd::new(
+                unsafe { BorrowedFd::borrow_raw(wake_fd) },
+                PollFlags::POLLIN,
+            ),
+            PollFd::new(
+                unsafe { BorrowedFd::borrow_raw(repeat_fd) },
+                PollFlags::POLLIN,
+            ),
         ];
-        let r = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as _, -1) };
-        if r < 0 {
-            let err = std::io::Error::last_os_error();
-            drop(read_guard);
-            if err.kind() == std::io::ErrorKind::Interrupted {
+        match poll(&mut pfds, PollTimeout::NONE) {
+            Err(Errno::EINTR) => {
+                drop(read_guard);
                 continue;
             }
-            break;
+            Err(_) => {
+                drop(read_guard);
+                break;
+            }
+            Ok(_) => {}
         }
+        let revents = |i: usize| pfds[i].revents().unwrap_or(PollFlags::empty());
 
-        if pfds[0].revents & libc::POLLIN != 0 {
+        if revents(0).contains(PollFlags::POLLIN) {
             if read_guard.read().is_err() {
                 break;
             }
         } else {
             drop(read_guard);
         }
-        if pfds[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+        if revents(0).intersects(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL) {
             break;
         }
-        if pfds[1].revents & libc::POLLIN != 0 {
+        if revents(1).contains(PollFlags::POLLIN) {
             wake.drain();
             // Wake reasons: cursor change request, or cleanup.
             if stop.load(Ordering::Relaxed) {
@@ -708,18 +837,32 @@ fn worker_loop(
             }
             // Cursor change is handled at the top of the next iteration.
         }
-
+        // Dispatch before the repeat fd: an unread release event would
+        // otherwise leave state.repeat_key stale for this check.
         let _ = queue.dispatch_pending(&mut state);
+
+        if revents(2).contains(PollFlags::POLLIN) {
+            // Drain the expiration count so a level-triggered re-fire
+            // doesn't spin the loop, then resend the held key.
+            let mut buf = [0u8; 8];
+            let _ = nix::unistd::read(unsafe { BorrowedFd::borrow_raw(repeat_fd) }, &mut buf);
+            state.fire_key_repeat();
+        }
     }
 
     let _ = cursor_type;
 }
 
-fn init_impl(display: *mut c_void, cb: Callbacks) -> Option<JfnInputWayland> {
+fn init_impl(display: *mut c_void, cb: Callbacks) -> Option<InputThread> {
     if display.is_null() {
         return None;
     }
     let wake = Arc::new(jfn_wake_event::WakeEvent::new()?);
+    let repeat_timer = TimerFd::new(
+        ClockId::CLOCK_MONOTONIC,
+        TimerFlags::TFD_NONBLOCK | TimerFlags::TFD_CLOEXEC,
+    )
+    .ok()?;
     let backend = unsafe { Backend::from_foreign_display(display as *mut _) };
     let conn = Connection::from_backend(backend);
     let (globals, queue) = registry_queue_init::<State>(&conn).ok()?;
@@ -730,6 +873,7 @@ fn init_impl(display: *mut c_void, cb: Callbacks) -> Option<JfnInputWayland> {
 
     let cursor_type = Arc::new(AtomicU32::new(CursorShape::Pointer.as_raw() as u32));
     let set_cursor_inbox = Arc::new(AtomicBool::new(false));
+    *KB_FOCUS_CB.lock() = cb.kb_focus;
 
     let state = State {
         cb,
@@ -756,6 +900,10 @@ fn init_impl(display: *mut c_void, cb: Callbacks) -> Option<JfnInputWayland> {
         modifiers: 0,
         cursor_type: cursor_type.clone(),
         menu_focus: false,
+        repeat_timer,
+        repeat_rate: 0,
+        repeat_delay: 0,
+        repeat_key: None,
     };
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -774,7 +922,7 @@ fn init_impl(display: *mut c_void, cb: Callbacks) -> Option<JfnInputWayland> {
             inbox_thread,
         )
     });
-    Some(JfnInputWayland {
+    Some(InputThread {
         cursor_type,
         set_cursor_inbox,
         stop,
@@ -784,34 +932,17 @@ fn init_impl(display: *mut c_void, cb: Callbacks) -> Option<JfnInputWayland> {
 }
 
 /// # Safety
-/// `display` must be a valid `wl_display*` and `callbacks` must point to
-/// a `Callbacks` live for the duration of the call (the value is copied
-/// in).
-pub unsafe fn jfn_input_wayland_init(
-    display: *mut c_void,
-    callbacks: *const Callbacks,
-) -> *mut JfnInputWayland {
-    let Some(cb) = (unsafe { callbacks.as_ref() }) else {
-        return std::ptr::null_mut();
-    };
-    let cb = *cb;
-    match init_impl(display, cb) {
+/// `display` must be a valid `wl_display*`.
+pub unsafe fn init(display: *mut c_void, callbacks: &Callbacks) -> *mut InputThread {
+    match init_impl(display, *callbacks) {
         Some(c) => Box::into_raw(Box::new(c)),
         None => std::ptr::null_mut(),
     }
 }
 
 /// # Safety
-/// `_ctx` is unused; the function is kept unsafe for symmetry with the
-/// rest of the FFI surface.
-pub unsafe fn jfn_input_wayland_start(_ctx: *mut JfnInputWayland) {
-    // Thread starts in init; this is kept for ABI compatibility with the
-    // C++ API which had an explicit start step.
-}
-
-/// # Safety
-/// `ctx` must be a pointer returned by [`jfn_input_wayland_init`] (or null).
-pub unsafe fn jfn_input_wayland_set_cursor(ctx: *mut JfnInputWayland, cef_cursor_type: u32) {
+/// `ctx` must be a pointer returned by [`init`] (or null).
+pub unsafe fn set_cursor(ctx: *mut InputThread, cef_cursor_type: u32) {
     let Some(c) = (unsafe { ctx.as_ref() }) else {
         return;
     };
@@ -822,13 +953,14 @@ pub unsafe fn jfn_input_wayland_set_cursor(ctx: *mut JfnInputWayland, cef_cursor
 }
 
 /// # Safety
-/// `ctx` must be the pointer returned by [`jfn_input_wayland_init`] (or
+/// `ctx` must be the pointer returned by [`init`] (or
 /// null). Calling twice with the same non-null `ctx` causes use-after-free.
-pub unsafe fn jfn_input_wayland_cleanup(ctx: *mut JfnInputWayland) {
+pub unsafe fn cleanup(ctx: *mut InputThread) {
     if ctx.is_null() {
         return;
     }
     let mut boxed = unsafe { Box::from_raw(ctx) };
+    *KB_FOCUS_CB.lock() = None;
     boxed.stop.store(true, Ordering::Relaxed);
     boxed.wake.signal();
     if let Some(w) = boxed.worker.get_mut().take() {

@@ -23,8 +23,6 @@ jfn-playback = { path = "../playback" }
 serde_json.workspace = true
 slotmap.workspace = true
 
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_System_Threading"] }

@@ -502,13 +502,7 @@ pub fn device_name() -> String {
 
 #[cfg(unix)]
 pub fn default_device_name() -> String {
-    let mut buf = [0u8; 256];
-    let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut _, buf.len()) };
-    if rc != 0 {
-        return String::new();
-    }
-    let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    let mut s = String::from_utf8_lossy(&buf[..len]).into_owned();
+    let mut s = gethostname::gethostname().to_string_lossy().into_owned();
     s.truncate(DEVICE_NAME_MAX);
     s
 }
@@ -541,6 +535,11 @@ bool_accessors!(
     transparent_titlebar
 );
 bool_accessors!(force_transcoding, set_force_transcoding, force_transcoding);
+/// The user's explicit decoration choice, unresolved; `None` when unset.
+pub fn configured_window_decorations() -> Option<WindowDecorations> {
+    state().lock().data.window_decorations
+}
+
 /// Browser-process only: falls back to the installed `Platform`, which panics
 /// if absent.
 pub fn window_decorations_mode() -> WindowDecorations {
@@ -551,10 +550,8 @@ pub fn window_decorations_mode() -> WindowDecorations {
 pub fn window_decorations() -> String {
     window_decorations_mode().as_str().to_string()
 }
-pub fn set_window_decorations(v: &str) {
-    if let Some(d) = WindowDecorations::parse(v) {
-        state().lock().data.window_decorations = Some(d);
-    }
+pub fn set_window_decorations(v: Option<&str>) {
+    state().lock().data.window_decorations = v.and_then(WindowDecorations::parse);
 }
 
 /// True when the app draws its own (client-side) titlebar.

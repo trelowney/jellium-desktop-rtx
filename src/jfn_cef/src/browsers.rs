@@ -49,6 +49,8 @@ struct Browsers {
     active_stack: Vec<*mut JfnCefLayer>,
     cursor_router: Router<CursorShape, CursorSink>,
     menu: MenuOwnership,
+    /// Last size applied via [`jfn_browsers_set_size`]; used only to size
+    /// layers created after the fact (`jfn_browsers_create`).
     lw: i32,
     lh: i32,
     pw: i32,
@@ -60,14 +62,7 @@ unsafe impl Send for Browsers {}
 
 static INSTANCE: Mutex<Option<Browsers>> = Mutex::new(None);
 
-pub fn jfn_browsers_init(
-    lw: i32,
-    lh: i32,
-    pw: i32,
-    ph: i32,
-    frame_rate: f64,
-    use_shared_textures: bool,
-) {
+pub fn jfn_browsers_init(frame_rate: f64, use_shared_textures: bool) {
     let fr = if frame_rate > 0.0 {
         (frame_rate + 0.5) as i32
     } else {
@@ -80,13 +75,16 @@ pub fn jfn_browsers_init(
         active_stack: Vec::new(),
         cursor_router: Router::new(CursorSink),
         menu: MenuOwnership::default(),
-        lw,
-        lh,
-        pw,
-        ph,
+        lw: 0,
+        lh: 0,
+        pw: 0,
+        ph: 0,
         frame_rate: fr,
     });
     crate::bridge::install();
+    jfn_platform_abi::subscribe_window_changed(crate::window_sync::sync_from_window);
+    // Seed the size cache before the first jfn_browsers_create.
+    crate::window_sync::sync_from_window();
 }
 
 /// Tear down all remaining layers. Called once at the end of run_with_cef.
@@ -265,23 +263,6 @@ pub fn jfn_browsers_set_size(lw: i32, lh: i32, pw: i32, ph: i32) {
     }
 }
 
-pub fn jfn_browsers_set_scale(scale: f64) {
-    let (new_lw, new_lh, pw, ph) = {
-        let g = INSTANCE.lock();
-        let Some(b) = g.as_ref() else { return };
-        if scale <= 0.0 || b.pw <= 0 || b.ph <= 0 {
-            return;
-        }
-        (
-            (b.pw as f64 / scale) as i32,
-            (b.ph as f64 / scale) as i32,
-            b.pw,
-            b.ph,
-        )
-    };
-    jfn_browsers_set_size(new_lw, new_lh, pw, ph);
-}
-
 pub fn jfn_browsers_set_refresh_rate(hz: f64) {
     if hz <= 0.0 {
         return;
@@ -370,6 +351,30 @@ pub(crate) fn jfn_browsers_apply_hidden_all(hidden: bool) {
 /// posts a TID_UI task that calls `WasHidden(hidden)` on each layer.
 pub fn jfn_browsers_set_hidden_all(hidden: bool) {
     crate::client::jfn_cef_post_set_hidden_all(hidden);
+}
+
+/// TID_UI only: re-announce the CSD state to every live layer's page.
+pub(crate) fn jfn_browsers_apply_csd_state_all() {
+    let inners: Vec<Arc<Inner>> = {
+        let g = INSTANCE.lock();
+        let Some(b) = g.as_ref() else {
+            return;
+        };
+        b.layers
+            .iter()
+            .map(|l| unsafe { jfn_cef_layer_inner(*l) })
+            .collect()
+    };
+    let js = crate::window_controls::csd_state_js();
+    for i in &inners {
+        i.exec_js(&js);
+    }
+}
+
+/// Re-announce the CSD state to every live browser. Thread-agnostic: posts a
+/// TID_UI task.
+pub fn jfn_browsers_push_csd_state_all() {
+    crate::client::jfn_cef_post_csd_state_all();
 }
 
 /// Force-close every layer's browser and block until each `OnBeforeClose`

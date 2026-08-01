@@ -16,16 +16,16 @@ unsafe impl Sync for ProxySlot {}
 pub struct WaylandMpvHost;
 
 impl MpvHost for WaylandMpvHost {
-    fn prepare(&self, decorations: WindowDecorations) {
-        unsafe { start_proxy(decorations) };
+    fn prepare(&self, configured: Option<WindowDecorations>) {
+        unsafe { start_proxy(configured) };
     }
 
     fn host_ready(&self) -> bool {
-        crate::window_state::jfn_wl_scale_known()
+        crate::window_state::scale_known()
     }
 
     fn window_maximized(&self) -> Option<bool> {
-        Some(crate::window_state::jfn_wl_window_maximized())
+        Some(crate::window_state::window_maximized())
     }
 
     fn ensure_host_window(&self) {
@@ -35,7 +35,7 @@ impl MpvHost for WaylandMpvHost {
     fn detach(&self) {}
 }
 
-unsafe fn start_proxy(decorations: WindowDecorations) {
+unsafe fn start_proxy(configured: Option<WindowDecorations>) {
     let p = start();
     if p.is_null() {
         tracing::error!(target: "Main", "proxy start failed; continuing without proxy");
@@ -56,7 +56,7 @@ unsafe fn start_proxy(decorations: WindowDecorations) {
         return;
     }
     tracing::info!(target: "Main", "proxy listening on {disp}");
-    crate::root_window::set_decorations(decorations);
+    crate::root_window::set_decorations(configured);
     unsafe { std::env::set_var("WAYLAND_DISPLAY", &disp) };
     let _ = PROXY.set(ProxySlot(p));
 }
