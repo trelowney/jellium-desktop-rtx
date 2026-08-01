@@ -210,7 +210,7 @@ fn download(url: &str, tmp: &Path, shared: &Shared) -> Result<(), String> {
         .arg(url)
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|e| format!("Nepodařilo se spustit stahování (curl): {e}"))?;
+        .map_err(|e| format!("Could not start the download (curl): {e}"))?;
 
     loop {
         match child.try_wait() {
@@ -221,7 +221,7 @@ fn download(url: &str, tmp: &Path, shared: &Shared) -> Result<(), String> {
                 if status.success() {
                     return Ok(());
                 }
-                return Err("Stažení aktualizace se nezdařilo.".into());
+                return Err("Downloading the update failed.".into());
             }
             Ok(None) => {
                 if let Ok(meta) = std::fs::metadata(tmp) {
@@ -229,18 +229,18 @@ fn download(url: &str, tmp: &Path, shared: &Shared) -> Result<(), String> {
                 }
                 std::thread::sleep(Duration::from_millis(200));
             }
-            Err(e) => return Err(format!("Chyba při stahování: {e}")),
+            Err(e) => return Err(format!("Download error: {e}")),
         }
     }
 }
 
 /// Sanity-check the archive before we overwrite anything with it.
 fn verify_zip(tmp: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(tmp).map_err(|e| format!("Otevření archivu selhalo: {e}"))?;
+    let file = std::fs::File::open(tmp).map_err(|e| format!("Could not open the archive: {e}"))?;
     let mut zip =
-        zip::ZipArchive::new(file).map_err(|e| format!("Neplatný archiv aktualizace: {e}"))?;
+        zip::ZipArchive::new(file).map_err(|e| format!("Invalid update archive: {e}"))?;
     if zip.by_name("jellium-desktop.exe").is_err() {
-        return Err("Archiv neobsahuje aplikaci (jellium-desktop.exe).".into());
+        return Err("The archive does not contain the app (jellium-desktop.exe).".into());
     }
     Ok(())
 }
@@ -248,14 +248,14 @@ fn verify_zip(tmp: &Path) -> Result<(), String> {
 /// Extract every entry over the install dir. Files are retried because CEF child
 /// processes can briefly keep DLLs locked right after the app exits.
 fn extract_over(tmp: &Path, dir: &Path) -> Result<(), String> {
-    let file = std::fs::File::open(tmp).map_err(|e| format!("Otevření archivu selhalo: {e}"))?;
+    let file = std::fs::File::open(tmp).map_err(|e| format!("Could not open the archive: {e}"))?;
     let mut zip =
-        zip::ZipArchive::new(file).map_err(|e| format!("Neplatný archiv aktualizace: {e}"))?;
+        zip::ZipArchive::new(file).map_err(|e| format!("Invalid update archive: {e}"))?;
 
     for i in 0..zip.len() {
         let mut entry = zip
             .by_index(i)
-            .map_err(|e| format!("Čtení archivu selhalo: {e}"))?;
+            .map_err(|e| format!("Could not read the archive: {e}"))?;
         // enclosed_name strips any `..` / absolute components (zip-slip guard).
         let Some(rel) = entry.enclosed_name() else {
             continue;
@@ -270,7 +270,7 @@ fn extract_over(tmp: &Path, dir: &Path) -> Result<(), String> {
         }
         let mut data = Vec::new();
         std::io::Read::read_to_end(&mut entry, &mut data)
-            .map_err(|e| format!("Čtení souboru z archivu selhalo: {e}"))?;
+            .map_err(|e| format!("Could not read a file from the archive: {e}"))?;
         write_with_retry(&out, &data)?;
     }
     Ok(())
@@ -285,7 +285,7 @@ fn write_with_retry(out: &Path, data: &[u8]) -> Result<(), String> {
             Ok(mut file) => {
                 return file
                     .write_all(data)
-                    .map_err(|e| format!("Zápis {} selhal: {e}", out.display()));
+                    .map_err(|e| format!("Could not write {}: {e}", out.display()));
             }
             Err(_) if attempt < 5 => std::thread::sleep(Duration::from_millis(300)),
             Err(_) => break,
@@ -308,12 +308,12 @@ fn write_with_retry(out: &Path, data: &[u8]) -> Result<(), String> {
         };
         let _ = std::fs::remove_file(&aside);
         std::fs::rename(out, &aside)
-            .map_err(|e| format!("Nelze odsunout zamčený soubor {}: {e}", out.display()))?;
+            .map_err(|e| format!("Could not move the locked file {} aside: {e}", out.display()))?;
     }
     let mut file = std::fs::File::create(out)
-        .map_err(|e| format!("Vytvoření {} selhalo: {e}", out.display()))?;
+        .map_err(|e| format!("Could not create {}: {e}", out.display()))?;
     file.write_all(data)
-        .map_err(|e| format!("Zápis {} selhal: {e}", out.display()))
+        .map_err(|e| format!("Could not write {}: {e}", out.display()))
 }
 
 /// Best-effort sweep of `.old-*` leftovers from a previous update's rename-aside
@@ -369,7 +369,7 @@ fn create_window() -> Option<HWND> {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             CLASS_NAME,
-            w!("Jellium Desktop RTX — Aktualizace"),
+            w!("Jellium Desktop RTX — Update"),
             style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
@@ -535,12 +535,12 @@ fn paint(hwnd: HWND) {
 
 fn phase_text(shared: &Shared, phase: u8) -> (String, String) {
     let ver = if shared.version.is_empty() {
-        "novou verzi".to_string()
+        "the new version".to_string()
     } else {
         shared.version.clone()
     };
     match phase {
-        PHASE_WAIT => ("Čekání na ukončení aplikace…".into(), String::new()),
+        PHASE_WAIT => ("Waiting for the app to exit…".into(), String::new()),
         PHASE_DOWNLOAD => {
             let d = shared.downloaded.load(Ordering::Acquire);
             let t = shared.total.load(Ordering::Acquire);
@@ -549,14 +549,14 @@ fn phase_text(shared: &Shared, phase: u8) -> (String, String) {
             } else {
                 format!("{} MB", d / 1_000_000)
             };
-            (format!("Stahuji {ver}…"), detail)
+            (format!("Downloading {ver}…"), detail)
         }
-        PHASE_VERIFY => ("Ověřuji stažený soubor…".into(), String::new()),
-        PHASE_EXTRACT => ("Instaluji aktualizaci…".into(), String::new()),
-        PHASE_RELAUNCH | PHASE_DONE => ("Hotovo — spouštím aplikaci…".into(), String::new()),
+        PHASE_VERIFY => ("Verifying the download…".into(), String::new()),
+        PHASE_EXTRACT => ("Installing the update…".into(), String::new()),
+        PHASE_RELAUNCH | PHASE_DONE => ("Done — starting the app…".into(), String::new()),
         PHASE_ERROR => {
             let msg = shared.error.lock().map(|m| m.clone()).unwrap_or_default();
-            ("Aktualizace se nezdařila".into(), msg)
+            ("The update failed".into(), msg)
         }
         _ => (String::new(), String::new()),
     }
