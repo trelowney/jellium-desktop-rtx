@@ -17,6 +17,13 @@ use std::thread::{self, JoinHandle};
 const DEVICE_NAME_MAX: usize = 64;
 const HWDEC_DEFAULT: &str = "no";
 
+/// Forward playback buffer (`--demuxer-max-bytes`) in MiB. Jellyfin Media Player
+/// exposed this as a "cache size" setting; jellium-desktop dropped it, so the RTX
+/// fork brings it back. Bounds match the values offered in the settings UI.
+pub const CACHE_SIZE_MB_DEFAULT: i32 = 256;
+pub const CACHE_SIZE_MB_MIN: i32 = 32;
+pub const CACHE_SIZE_MB_MAX: i32 = 4096;
+
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
     pub x: i32,
@@ -61,6 +68,7 @@ struct SettingsData {
     hide_scrollbar: bool,
     rtx_vsr: bool,
     rtx_hdr: bool,
+    cache_size_mb: i32,
 }
 
 impl Default for SettingsData {
@@ -81,8 +89,16 @@ impl Default for SettingsData {
             hide_scrollbar: true,
             rtx_vsr: false,
             rtx_hdr: false,
+            cache_size_mb: CACHE_SIZE_MB_DEFAULT,
         }
     }
+}
+
+/// Clamp a requested buffer size into the supported range. Out-of-range values
+/// (hand-edited config, stale UI) fall back to the nearest bound rather than
+/// handing mpv something absurd.
+fn clamp_cache_size(mb: i32) -> i32 {
+    mb.clamp(CACHE_SIZE_MB_MIN, CACHE_SIZE_MB_MAX)
 }
 
 impl SettingsData {
@@ -164,6 +180,9 @@ impl SettingsData {
         if let Some(b) = v.get("rtxHdr").and_then(Value::as_bool) {
             self.rtx_hdr = b;
         }
+        if let Some(n) = v.get("cacheSize").and_then(Value::as_i64) {
+            self.cache_size_mb = clamp_cache_size(n as i32);
+        }
     }
 
     fn to_json(&self) -> Value {
@@ -236,6 +255,9 @@ impl SettingsData {
         if self.rtx_hdr {
             o.insert("rtxHdr".into(), Value::Bool(true));
         }
+        if self.cache_size_mb != CACHE_SIZE_MB_DEFAULT {
+            o.insert("cacheSize".into(), json!(self.cache_size_mb));
+        }
         if !self.device_name.is_empty() {
             o.insert("deviceName".into(), Value::String(self.device_name.clone()));
         }
@@ -280,6 +302,7 @@ impl SettingsData {
         o.insert("hideScrollbar".into(), Value::Bool(self.hide_scrollbar));
         o.insert("rtxVsr".into(), Value::Bool(self.rtx_vsr));
         o.insert("rtxHdr".into(), Value::Bool(self.rtx_hdr));
+        o.insert("cacheSize".into(), json!(self.cache_size_mb));
         if !self.device_name.is_empty() {
             o.insert("deviceName".into(), Value::String(self.device_name.clone()));
         }
@@ -564,6 +587,16 @@ pub fn titlebar_theme_color() -> bool {
 bool_accessors!(hide_scrollbar, set_hide_scrollbar, hide_scrollbar);
 bool_accessors!(rtx_vsr, set_rtx_vsr, rtx_vsr);
 bool_accessors!(rtx_hdr, set_rtx_hdr, rtx_hdr);
+
+/// Forward playback buffer in MiB; always within
+/// [`CACHE_SIZE_MB_MIN`]..=[`CACHE_SIZE_MB_MAX`].
+pub fn cache_size_mb() -> i32 {
+    state().lock().data.cache_size_mb
+}
+
+pub fn set_cache_size_mb(mb: i32) {
+    state().lock().data.cache_size_mb = clamp_cache_size(mb);
+}
 
 pub fn window_geometry() -> JfnWindowGeometry {
     state().lock().data.window

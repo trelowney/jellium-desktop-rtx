@@ -67,6 +67,9 @@ pub struct JfnMpvBoot {
     /// Windows + NVIDIA RTX: enable RTX Video HDR (SDR->HDR via the `d3d11vpp`
     /// filter). Forces `hwdec=d3d11va`. Ignored off Windows.
     pub rtx_hdr: bool,
+    /// Forward playback buffer in MiB (`--demuxer-max-bytes`). Values <= 0 leave
+    /// mpv's own default in place.
+    pub cache_size_mb: i32,
 }
 
 /// Owns the Handle for the rest of the process. `mpv_terminate_destroy`
@@ -209,8 +212,42 @@ fn apply_boot_options(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Resul
     {
         set("audio-channels", &ch)?;
     }
+    apply_cache_size(handle, boot.cache_size_mb)?;
     // Applied last so it can override hwdec when RTX enhancement is enabled.
     apply_rtx_video(handle, boot)?;
+    Ok(())
+}
+
+/// Size the forward playback buffer, the way Jellyfin Media Player's "cache"
+/// setting did: read ahead until the chosen number of megabytes is buffered,
+/// regardless of how many seconds of playback that turns out to be.
+///
+/// mpv bounds readahead by time *and* by bytes, and stops at whichever it hits
+/// first — so the byte figure only means what it says once the time bounds are
+/// pushed out of the way. `cache=yes` turns the cache on for every stream (mpv's
+/// `auto` covers network only), `demuxer-max-bytes` is the cap we actually want,
+/// and both time limits are raised to [`READAHEAD_UNBOUNDED_SECS`]: `cache-secs`
+/// (default 10s) governs seekable streams once the cache is on, while
+/// `demuxer-readahead-secs` (default 1s) still governs non-seekable ones such as
+/// live streams. Leaving either at its default would silently cap a large buffer
+/// at a few seconds' worth of media.
+///
+/// Only the forward buffer is touched; `demuxer-max-back-bytes` keeps mpv's
+/// default so a large setting doesn't quietly double the process's memory use.
+fn apply_cache_size(handle: &Handle, mb: i32) -> crate::error::Result<()> {
+    /// Time limit high enough (~27 hours of media) that the byte cap is always
+    /// what stops readahead first. mpv has no "unlimited" keyword for these.
+    const READAHEAD_UNBOUNDED_SECS: &str = "100000";
+
+    if mb <= 0 {
+        return Ok(());
+    }
+    let set = |name: &str, value: &str| set_option_or_skip(handle, name, value);
+    set("cache", "yes")?;
+    set("demuxer-max-bytes", &format!("{mb}MiB"))?;
+    set("cache-secs", READAHEAD_UNBOUNDED_SECS)?;
+    set("demuxer-readahead-secs", READAHEAD_UNBOUNDED_SECS)?;
+    tracing::info!(target: "mpv", "forward buffer: {mb} MiB (byte-bound readahead)");
     Ok(())
 }
 

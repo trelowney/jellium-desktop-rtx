@@ -93,6 +93,7 @@
             main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
             playback: {
                 hwdec: _savedSettings.hwdec || 'auto',
+                cacheSize: _savedSettings.cacheSize || 256,
                 rtxVsr: !!_savedSettings.rtxVsr,
                 rtxHdr: !!_savedSettings.rtxHdr
             },
@@ -114,7 +115,17 @@
         },
         settingsDescriptions: {
             playback: [
-                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Hardware video decoding mode. Use "auto" for automatic detection or "no" to disable.', options: _savedSettings.hwdecOptions }
+                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Hardware video decoding mode. Use "auto" for automatic detection or "no" to disable.', options: _savedSettings.hwdecOptions },
+                { key: 'cacheSize', displayName: 'Buffer Size', help: 'How much of the stream to buffer ahead of playback. Larger values ride out network hiccups but use that much RAM. Requires restart.', options: [
+                    { value: 32, title: '32 MB' },
+                    { value: 64, title: '64 MB' },
+                    { value: 128, title: '128 MB' },
+                    { value: 256, title: '256 MB (default)' },
+                    { value: 512, title: '512 MB' },
+                    { value: 1024, title: '1 GB' },
+                    { value: 2048, title: '2 GB' },
+                    { value: 4096, title: '4 GB' }
+                ]}
             ],
             audio: [
                 { key: 'audioPassthrough', displayName: 'Audio Passthrough', help: 'Comma-separated list of codecs to pass through to the audio device (e.g. ac3,eac3,dts-hd,truehd). Leave empty to disable.', inputType: 'textarea' },

@@ -146,6 +146,7 @@ struct StartupOptions {
     disable_gpu_compositing: bool,
     rtx_vsr: bool,
     rtx_hdr: bool,
+    cache_size_mb: i32,
     remote_debugging_port: c_int,
 }
 
@@ -157,6 +158,7 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
     let saved_audio_exclusive = jfn_config::audio_exclusive();
     let rtx_vsr = jfn_config::rtx_vsr();
     let rtx_hdr = jfn_config::rtx_hdr();
+    let cache_size_mb = jfn_config::cache_size_mb();
 
     let mpv_hwdec_default = jfn_mpv::HWDEC_DEFAULT.to_string();
 
@@ -214,6 +216,7 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
         disable_gpu_compositing,
         rtx_vsr,
         rtx_hdr,
+        cache_size_mb,
         remote_debugging_port,
     }
 }
@@ -230,6 +233,7 @@ struct MpvInitOptions<'a> {
     mpv_log_level: &'a str,
     rtx_vsr: bool,
     rtx_hdr: bool,
+    cache_size_mb: i32,
 }
 
 fn init_mpv_handle(opts: MpvInitOptions<'_>) -> *mut jfn_mpv::sys::mpv_handle {
@@ -261,6 +265,7 @@ fn init_mpv_handle(opts: MpvInitOptions<'_>) -> *mut jfn_mpv::sys::mpv_handle {
         client_side_decorations: jfn_config::client_side_decorations(),
         rtx_vsr: opts.rtx_vsr,
         rtx_hdr: opts.rtx_hdr,
+        cache_size_mb: opts.cache_size_mb,
     };
     unsafe { jfn_mpv::boot::jfn_mpv_handle_init(&boot as *const _) }
 }
@@ -616,6 +621,7 @@ pub fn jfn_app_main() -> c_int {
         mpv_log_level,
         rtx_vsr: opts.rtx_vsr,
         rtx_hdr: opts.rtx_hdr,
+        cache_size_mb: opts.cache_size_mb,
     });
     if raw.is_null() {
         tracing::error!(target: "Main", "mpv handle init failed");
