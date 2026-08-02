@@ -18,6 +18,65 @@
         return mediaStreams.find(s => s.Index === index) || null;
     }
 
+    // ---- Playback Info: forward-buffer formatting -----------------------
+    // Fed by window._nativeBufferStats (mpv's demuxer-cache-state, ~1 Hz).
+    const BUFFER_STATS_STALE_MS = 5000;
+    const NOT_AVAILABLE = '—';  // em dash
+
+    function formatBufferBytes(bytes) {
+        const mb = bytes / (1024 * 1024);
+        return mb >= 1000 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+    }
+
+    function formatBufferRate(bytesPerSec) {
+        const mb = bytesPerSec / (1024 * 1024);
+        return mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${Math.round(bytesPerSec / 1024)} kB/s`;
+    }
+
+    function formatBufferClock(seconds) {
+        const total = Math.round(seconds);
+        const s = String(total % 60).padStart(2, '0');
+        const m = Math.floor(total / 60) % 60;
+        const h = Math.floor(total / 3600);
+        return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+    }
+
+    // Reads as a sentence in four rows: how much is buffered, how much playback
+    // time that covers, how fast it is filling, and what the demuxer is doing.
+    function getBufferStatsCategory() {
+        const b = window.__bufferStats;
+        if (!b || typeof b.fwBytes !== 'number') return null;
+        const stale = Date.now() - b.at > BUFFER_STATS_STALE_MS;
+
+        let buffered = formatBufferBytes(b.fwBytes);
+        if (b.maxBytes > 0) {
+            const percent = Math.min(100, Math.round((b.fwBytes / b.maxBytes) * 100));
+            buffered += ` of ${formatBufferBytes(b.maxBytes)} (${percent}%)`;
+        }
+
+        // The rate is only meaningful while mpv is still reading — a paused or
+        // fully-buffered stream stops updating, so show a dash instead of the
+        // last number it happened to report.
+        const rate = stale || typeof b.rateBps !== 'number' ? NOT_AVAILABLE : formatBufferRate(b.rateBps);
+        const ahead = typeof b.seconds === 'number' ? formatBufferClock(b.seconds) : NOT_AVAILABLE;
+
+        let status;
+        if (b.underrun) status = 'Underrun (waiting for data)';
+        else if (b.eofCached) status = 'End of stream buffered';
+        else if (stale || b.idle) status = b.maxBytes > 0 && b.fwBytes >= b.maxBytes * 0.95 ? 'Full' : 'Idle';
+        else status = 'Filling';
+
+        return {
+            name: 'Playback Buffer',
+            stats: [
+                { label: 'Buffered ahead', value: buffered },
+                { label: 'Playback time buffered', value: ahead },
+                { label: 'Fill rate', value: rate },
+                { label: 'Status', value: status }
+            ]
+        };
+    }
+
     class mpvVideoPlayer extends window.MpvPlayerBase {
         constructor(args) {
             super(args);
@@ -362,6 +421,9 @@
                     ]
                 });
             }
+            // Directly under the RTX rows, ahead of jellyfin-web's own media info.
+            const buffer = getBufferStatsCategory();
+            if (buffer) categories.push(buffer);
             return Promise.resolve({ categories });
         }
         getSupportedAspectRatios() {

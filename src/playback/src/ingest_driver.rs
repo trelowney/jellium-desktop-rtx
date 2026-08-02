@@ -6,6 +6,7 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use jfn_mpv::{Event, PropertyValue, sys as mpv_sys};
 
@@ -406,6 +407,54 @@ fn report_rtx_status_from_log(text: &str) {
     }
 }
 
+/// Forward the demuxer's buffer figures to the web UI (Playback Info): how many
+/// bytes are queued ahead of the decoder, how much media that is, and how fast
+/// the buffer is filling.
+///
+/// mpv fires `demuxer-cache-state` on every demuxer update — far more often than
+/// a stats panel can use — so this throttles to about one push per second, which
+/// is also the window `raw-input-rate` is measured over. Fields mpv documents as
+/// "missing if unavailable" are forwarded as `null`; the JS side renders those as
+/// a dash instead of inventing a zero.
+fn push_buffer_stats(value: &PropertyValue) {
+    const MIN_INTERVAL: Duration = Duration::from_millis(900);
+    static LAST: parking_lot::Mutex<Option<Instant>> = parking_lot::Mutex::new(None);
+
+    let PropertyValue::Node(node) = value else {
+        return;
+    };
+    {
+        let now = Instant::now();
+        let mut last = LAST.lock();
+        if let Some(prev) = *last
+            && now.duration_since(prev) < MIN_INTERVAL
+        {
+            return;
+        }
+        *last = Some(now);
+    }
+    // `fw-bytes` and `raw-input-rate` are documented as INT64, `cache-duration`
+    // as DOUBLE; read either shape so a type change upstream degrades to a
+    // missing row rather than a wrong one.
+    let int_field = |key: &str| {
+        node.get(key)
+            .and_then(|v| v.as_int().or_else(|| v.as_double().map(|d| d as i64)))
+    };
+    let flag_field = |key: &str| node.get(key).and_then(jfn_mpv::Node::as_flag);
+    let payload = serde_json::json!({
+        "fwBytes": int_field("fw-bytes"),
+        "maxBytes": jfn_mpv::boot::forward_buffer_bytes(),
+        "rateBps": int_field("raw-input-rate"),
+        "seconds": node.get("cache-duration").and_then(jfn_mpv::Node::as_double),
+        "eofCached": flag_field("eof-cached").unwrap_or(false),
+        "underrun": flag_field("underrun").unwrap_or(false),
+        "idle": flag_field("idle").unwrap_or(false),
+    });
+    crate::exec_js::call(&format!(
+        "window._nativeBufferStats&&window._nativeBufferStats({payload})"
+    ));
+}
+
 /// One-shot: if RTX was enabled in settings but skipped because no NVIDIA GPU is
 /// present (see `jfn_mpv::boot::probe_nvidia_adapter`), tell the web UI so
 /// Playback Info shows "Unsupported" rather than a misleading "On". Driven off the
@@ -452,6 +501,9 @@ fn event_loop(handle_addr: usize, stop: std::sync::Arc<AtomicBool>) {
                 }
                 if id == crate::ingest::observe_id::TIME_POS {
                     push_rtx_skip_status_once();
+                }
+                if id == crate::ingest::observe_id::CACHE_STATE {
+                    push_buffer_stats(value);
                 }
             }
             _ => {}
