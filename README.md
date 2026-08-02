@@ -14,6 +14,7 @@ A personal fork of [**jellium-desktop**](https://github.com/andrewrabert/jellium
 - **Playback Info shows RTX status** — RTX VSR and RTX HDR are reported separately, so you can see whether each is applied.
 - **Separate data directory** — stores settings/cache/logs under `jellium-desktop-rtx`, so it won't clash with an installed stock jellyfin-desktop. On first run it **migrates settings from the stock install** (if present), so you don't have to log in / reconfigure.
 - **Buffer size is configurable** — Settings → Playback lets you pick how much of the stream to buffer ahead (32 MB – 4 GB, default 256 MB), the setting Jellyfin Media Player had and upstream dropped.
+- **Playback Info shows the buffer live** — how much is buffered of the configured limit, how much playback time that covers, the current fill rate, and what the buffer is doing (filling / full / underrun).
 - **Distinct branding** — green icon and "Jellium Desktop RTX" title, so it's obvious which build is running.
 - **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-06-26 (<commit>) · base jellyfin-desktop 3.0.0-dev@865e186`, so you always know the build date and which upstream commit it was made from.
 

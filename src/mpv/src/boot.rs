@@ -11,7 +11,7 @@ use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::ptr;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 use crate::handle::Handle;
 use crate::sys;
@@ -247,8 +247,21 @@ fn apply_cache_size(handle: &Handle, mb: i32) -> crate::error::Result<()> {
     set("demuxer-max-bytes", &format!("{mb}MiB"))?;
     set("cache-secs", READAHEAD_UNBOUNDED_SECS)?;
     set("demuxer-readahead-secs", READAHEAD_UNBOUNDED_SECS)?;
+    FORWARD_BUFFER_BYTES.store(i64::from(mb) * 1024 * 1024, Ordering::Relaxed);
     tracing::info!(target: "mpv", "forward buffer: {mb} MiB (byte-bound readahead)");
     Ok(())
+}
+
+/// The `demuxer-max-bytes` cap handed to mpv by [`apply_cache_size`], or 0 when
+/// the buffer setting left mpv's own default in place. Written once during init,
+/// read from the playback event thread so Playback Info can show how full the
+/// buffer is relative to its actual limit rather than re-deriving it from the
+/// stored setting.
+static FORWARD_BUFFER_BYTES: AtomicI64 = AtomicI64::new(0);
+
+/// Forward-buffer byte cap in effect, or 0 if mpv's default is in use.
+pub fn forward_buffer_bytes() -> i64 {
+    FORWARD_BUFFER_BYTES.load(Ordering::Relaxed)
 }
 
 /// RTX video enhancement was requested in settings but skipped because no NVIDIA

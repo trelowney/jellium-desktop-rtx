@@ -407,6 +407,14 @@
         window.__rtxStatus = window.__rtxStatus || {};
         window.__rtxStatus[feature] = state;
     };
+    // Forward-buffer figures from mpv's demuxer-cache-state, pushed about once a
+    // second while data is being read. Stashed with a receive timestamp so
+    // getStats() can tell a live fill rate from one frozen by a paused or
+    // finished stream.
+    window._nativeBufferStats = function(stats) {
+        stats.at = Date.now();
+        window.__bufferStats = stats;
+    };
 
     // window.NativeShell - app info and plugins
     const plugins = ['mpvVideoPlayer', 'mpvAudioPlayer', 'inputPlugin'];

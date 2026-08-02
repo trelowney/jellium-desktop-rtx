@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-08-03
+
+### Added
+- **Playback Info shows the buffer live.** A **Playback Buffer** section sits under the RTX rows with four figures, read straight from mpv's demuxer once a second: **Buffered ahead** (e.g. `184 MB of 256 MB (72%)` against the Buffer Size you picked), **Playback time buffered** (what those megabytes work out to in minutes — it varies with bitrate, which is the point of a byte-bound buffer), **Fill rate** (how fast data is currently arriving), and **Status** (*Filling*, *Full*, *Idle*, *Underrun*, or *End of stream buffered*). The fill rate shows a dash rather than a stale number once mpv stops reading, e.g. while paused.
+
 ## 2026-08-01.1
 
 ### Fixed
