@@ -3,6 +3,16 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-08-14
+
+### Added
+- **Playback Info reports what RTX actually did, not what was asked for.** The two RTX rows used to say *Active* as soon as mpv had asked the driver to switch the feature on — mpv only checks that the call didn't fail, so *Active* was a restatement of your own setting rather than an observation. Both rows now describe the pipeline mpv really produced. **RTX Video HDR** is genuinely verifiable, because the conversion has to show up as PQ / BT.2020 on the filter output: it reports *Active — output converted to PQ*, or *Enabled, but output is still bt709 (not converting)* when it didn't happen, or *Not needed (source is already HDR)*. **RTX Super Resolution** reports the scaling it can prove — *Scaling 1920×1080 → 3840×2160 (2×), display 2560×1440*. It deliberately stops short of claiming NVIDIA's AI path is doing the work: the driver exposes no way to ask (unlike HDR, the Super Resolution extension is write-only — it can be switched on, never queried), so claiming otherwise would be the same placebo in new wording.
+- **A Pipeline row and a GPU load row.** *Pipeline* shows the raw evidence behind the rows above — decoded frame → filter output → what reaches the display, with each stage's transfer function. *GPU load* is sampled from NVML once a second, and is the closest available corroboration for Super Resolution: a GPU sitting near idle during an upscale is not upscaling.
+
+### Changed
+- **Super Resolution stops upscaling when there is nothing to gain.** The filter enlarged every frame 2× regardless of where it was going, so a 1080p file on a 1080p screen, or a 4K file on a 1440p one, paid the full GPU cost for a picture the video output then resized straight back. The scaling stage is now switched on only when the output is actually larger than the decoded frame, decided per file once both sizes are known, and re-evaluated when they change. The comparison is against the real output size rather than the monitor's native resolution, so a small window on a big display doesn't upscale either. Both filter chains keep the `x2bgr10` format and the HDR conversion, so switching between them can never lose either.
+- **Re-synced onto upstream jellium-desktop `28f2cf1`** (was `f3ba9cd`), which moves **CEF from 150 to 151**. Upstream rebuilt the Windows compositor on DirectComposition and then moved it, and macOS, onto wgpu; made the GPU paint layer cross-platform; moved the Windows and macOS code onto `windows-sys` and `objc2` bindings; swept sync primitives onto `parking_lot`/`crossbeam`; typed the config and JS payloads with serde; reworked video-output boot readiness; unified menu handling; and fixed a crash on single-page navigation. Every RTX fork feature was carried across and verified individually.
+
 ## 2026-08-03
 
 ### Added
