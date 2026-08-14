@@ -278,6 +278,25 @@ pub fn forward_buffer_bytes() -> i64 {
 static RTX_SKIPPED_NO_GPU_VSR: AtomicBool = AtomicBool::new(false);
 static RTX_SKIPPED_NO_GPU_HDR: AtomicBool = AtomicBool::new(false);
 
+/// The two `d3d11vpp` chains RTX Super Resolution switches between: one that
+/// upscales and one that does not. Both keep the 10-bit output format and the
+/// HDR conversion, so switching only ever adds or removes the scaling stage.
+///
+/// Only populated when Super Resolution is enabled in settings and an NVIDIA GPU
+/// was found. Empty on every other platform and configuration.
+static RTX_VF_SCALED: OnceLock<String> = OnceLock::new();
+static RTX_VF_PLAIN: OnceLock<String> = OnceLock::new();
+
+/// Filter chain including the Super Resolution scaling stage, if RTX is active.
+pub fn rtx_vf_scaled() -> Option<&'static str> {
+    RTX_VF_SCALED.get().map(String::as_str)
+}
+
+/// Same chain without the scaling stage, for when upscaling would gain nothing.
+pub fn rtx_vf_plain() -> Option<&'static str> {
+    RTX_VF_PLAIN.get().map(String::as_str)
+}
+
 /// True if RTX VSR was enabled in settings but skipped for lack of an NVIDIA GPU.
 pub fn rtx_skipped_no_gpu_vsr() -> bool {
     RTX_SKIPPED_NO_GPU_VSR.load(Ordering::Relaxed)
@@ -414,24 +433,33 @@ fn apply_rtx_video(handle: &Handle, boot: &JfnMpvBoot) -> crate::error::Result<(
     // the RTX VSR/HDR extension never engages, so pin it explicitly.
     set("gpu-api", "d3d11")?;
 
-    let mut parts: Vec<String> = Vec::new();
-    if boot.rtx_vsr {
-        parts.push("scaling-mode=nvidia".into());
-        // Fixed 2x upscale (ideal for 1080p->4K); mpv downscales to the display
-        // afterwards. Dynamic display-matched scaling is a possible follow-up.
-        parts.push("scale=2".into());
-    }
-    // Always give the VPP a defined 10-bit output format. Without it, a 10-bit
-    // HDR source (BT.2020 PQ / P010) pushed through a VSR-only chain — RTX HDR
-    // conversion off — is emitted in a format the renderer misreads, producing
-    // a green frame. A fixed x2bgr10 output lets mpv tone-map HDR->SDR itself
-    // (matching the stock client's behaviour on an SDR display) and is harmless
-    // for 8-bit SDR input. The true-HDR conversion stays gated on rtx_hdr below.
-    parts.push("format=x2bgr10".into());
+    // Everything except the scaling stage. Always give the VPP a defined 10-bit
+    // output format: without it, a 10-bit HDR source (BT.2020 PQ / P010) pushed
+    // through a VSR-only chain — RTX HDR conversion off — is emitted in a format
+    // the renderer misreads, producing a green frame. A fixed x2bgr10 output lets
+    // mpv tone-map HDR->SDR itself (matching the stock client's behaviour on an
+    // SDR display) and is harmless for 8-bit SDR input. The true-HDR conversion
+    // stays gated on rtx_hdr.
+    let mut common: Vec<String> = vec!["format=x2bgr10".into()];
     if boot.rtx_hdr {
-        parts.push("nvidia-true-hdr".into());
+        common.push("nvidia-true-hdr".into());
     }
-    let vf = format!("d3d11vpp={}", parts.join(":"));
+    let plain = format!("d3d11vpp={}", common.join(":"));
+
+    let vf = if boot.rtx_vsr {
+        // Fixed 2x upscale; mpv's video output resizes to the window afterwards.
+        let mut scaled_parts = vec!["scaling-mode=nvidia".to_string(), "scale=2".to_string()];
+        scaled_parts.extend(common.iter().cloned());
+        let scaled = format!("d3d11vpp={}", scaled_parts.join(":"));
+        // Whether upscaling is worth doing depends on the source and output
+        // sizes, neither of which is known before a file plays, so both chains
+        // are published here and jfn_playback switches once it can see them.
+        let _ = RTX_VF_SCALED.set(scaled.clone());
+        let _ = RTX_VF_PLAIN.set(plain);
+        scaled
+    } else {
+        plain
+    };
     set("vf", &vf)?;
 
     if boot.rtx_hdr {

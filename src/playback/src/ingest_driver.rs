@@ -439,6 +439,36 @@ fn report_rtx_status_from_log(text: &str) {
 /// is also the window `raw-input-rate` is measured over. Fields mpv documents as
 /// "missing if unavailable" are forwarded as `null`; the JS side renders those as
 /// a dash instead of inventing a zero.
+/// Sample GPU utilisation and push it to the web UI, about once a second.
+///
+/// Driven off `time-pos`, which ticks per frame — far more often than a stats
+/// panel can use, and NVML is a driver call rather than a free read, so it is
+/// throttled. This is the only remaining evidence that RTX Super Resolution is
+/// doing work: the driver will not say whether it is engaged, but it cannot hide
+/// the cost.
+fn push_gpu_load() {
+    const MIN_INTERVAL: Duration = Duration::from_millis(1000);
+    static LAST: parking_lot::Mutex<Option<Instant>> = parking_lot::Mutex::new(None);
+
+    {
+        let now = Instant::now();
+        let mut last = LAST.lock();
+        if let Some(prev) = *last
+            && now.duration_since(prev) < MIN_INTERVAL
+        {
+            return;
+        }
+        *last = Some(now);
+    }
+    let Some(load) = jfn_mpv::gpu_load() else {
+        return;
+    };
+    crate::exec_js::call(&format!(
+        "window._nativeGpuLoad&&window._nativeGpuLoad({},{})",
+        load.gpu, load.memory
+    ));
+}
+
 /// One stage of the video pipeline, as the web UI needs it. Everything is
 /// optional: mpv leaves sub-properties out until a frame has been decoded, and
 /// a missing value must read as "unknown" rather than as a claim.
@@ -510,12 +540,81 @@ fn push_video_pipeline(id: u64, value: &PropertyValue) {
         }
         pipeline.clone()
     };
+    apply_rtx_scaling_decision(&snapshot);
+
     let Some(json) = jfn_js_json::to_js_json(&snapshot) else {
         return;
     };
     crate::exec_js::call(&format!(
         "window._nativeVideoPipeline&&window._nativeVideoPipeline({json})"
     ));
+}
+
+/// Turn the Super Resolution scaling stage on or off to match what the output
+/// actually needs.
+///
+/// RTX only upscales, so it earns its cost only when the video output is larger
+/// than the decoded frame. Playing a 1080p file on a 1080p screen, or a 4K file
+/// on a 1440p one, would otherwise still enlarge every frame 2x and have the
+/// video output shrink it straight back — full GPU cost for a picture that ends
+/// up where it started. Neither size is known before a file plays, hence the
+/// decision here rather than at startup.
+///
+/// The comparison is against the real output size, not the monitor's native
+/// resolution: a 720p window on a 4K display gains nothing either.
+///
+/// No-op unless Super Resolution is enabled and an NVIDIA GPU was found, and the
+/// filter is only reconfigured when the decision actually changes, so a resize
+/// that does not cross the threshold costs nothing.
+fn apply_rtx_scaling_decision(pipeline: &VideoPipeline) {
+    static APPLIED: parking_lot::Mutex<Option<bool>> = parking_lot::Mutex::new(None);
+
+    let (Some(scaled), Some(plain)) = (
+        jfn_mpv::boot::rtx_vf_scaled(),
+        jfn_mpv::boot::rtx_vf_plain(),
+    ) else {
+        return;
+    };
+    let (Some(src_w), Some(src_h)) = (pipeline.source.w, pipeline.source.h) else {
+        return;
+    };
+    let (Some(out_w), Some(out_h)) = (pipeline.target.w, pipeline.target.h) else {
+        return;
+    };
+    if src_w <= 0 || src_h <= 0 || out_w <= 0 || out_h <= 0 {
+        return;
+    }
+
+    // Either dimension being larger means there is something to upscale;
+    // anamorphic content can gain on one axis alone.
+    let want_scaling = out_w > src_w || out_h > src_h;
+    {
+        let mut applied = APPLIED.lock();
+        if *applied == Some(want_scaling) {
+            return;
+        }
+        *applied = Some(want_scaling);
+    }
+
+    let vf = if want_scaling { scaled } else { plain };
+    let Ok(name) = std::ffi::CString::new("vf") else {
+        return;
+    };
+    let Ok(value) = std::ffi::CString::new(vf) else {
+        return;
+    };
+    unsafe { jfn_mpv::api::jfn_mpv_set_property_string_async(name.as_ptr(), value.as_ptr()) };
+    if want_scaling {
+        tracing::info!(
+            target: "mpv",
+            "RTX Super Resolution scaling on: {src_w}x{src_h} -> output {out_w}x{out_h}"
+        );
+    } else {
+        tracing::info!(
+            target: "mpv",
+            "RTX Super Resolution scaling off: {src_w}x{src_h} is not smaller than output {out_w}x{out_h}; upscaling would be discarded"
+        );
+    }
 }
 
 /// The buffer figures handed to the web UI. Fields mpv documents as "missing if
@@ -619,6 +718,7 @@ fn ingest_events(rx: Receiver<Event>) {
             }
             if id == crate::ingest::observe_id::TIME_POS {
                 push_rtx_skip_status_once();
+                push_gpu_load();
             }
             if id == crate::ingest::observe_id::CACHE_STATE {
                 push_buffer_stats(value);

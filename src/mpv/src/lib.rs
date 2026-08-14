@@ -17,6 +17,7 @@ mod event_loop;
 mod handle;
 mod log;
 mod node;
+mod nvml;
 mod options;
 mod property;
 
@@ -35,5 +36,6 @@ pub use log::{
     LogLevel, forward_to_tracing as forward_log_to_tracing, set_observer as set_log_observer,
 };
 pub use node::{Node, NodeArray, NodeMap};
+pub use nvml::{GpuLoad, gpu_load};
 pub use options::{HWDEC_DEFAULT, hwdec_options, is_valid_hwdec};
 pub use property::Format;
