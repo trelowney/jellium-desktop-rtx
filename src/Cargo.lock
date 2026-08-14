@@ -2579,6 +2579,7 @@ dependencies = [
  "jfn-wake-event",
  "parking_lot",
  "serde",
+ "tracing",
 ]
 
 [[package]]

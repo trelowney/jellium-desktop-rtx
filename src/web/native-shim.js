@@ -422,6 +422,12 @@
     window._nativeVideoPipeline = function(pipeline) {
         window.__videoPipeline = pipeline;
     };
+    // GPU utilisation from NVML, sampled about once a second while playing. The
+    // driver will not say whether Super Resolution is engaged, so this is the
+    // only measure of whether it is doing work.
+    window._nativeGpuLoad = function(gpu, memory) {
+        window.__gpuLoad = { gpu: gpu, memory: memory, at: Date.now() };
+    };
 
     // window.NativeShell - app info and plugins
     const plugins = ['mpvVideoPlayer', 'mpvAudioPlayer', 'inputPlugin'];

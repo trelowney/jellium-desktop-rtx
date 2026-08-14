@@ -87,8 +87,10 @@
         const out = p.filtered;
         if (!(out && out.w > 0)) return 'Enabled (driver accepted)';
         if (out.w <= src.w) {
-            // The filter produced no enlargement, so nothing was upscaled.
-            return 'Enabled, but the filter is not scaling';
+            // Not a fault: the scaling stage is dropped when the output is no
+            // larger than the source, since anything upscaled would be resized
+            // straight back down again.
+            return 'Enabled — not upscaling (output is not larger than the source)';
         }
         const factor = (out.w / src.w).toFixed(2).replace(/\.?0+$/, '');
         let value = `Scaling ${sizeOf(src)} → ${sizeOf(out)} (${factor}×)`;
@@ -123,6 +125,16 @@
             return `Enabled, but output is still ${p.filtered.gamma} (not converting)`;
         }
         return 'Enabled';
+    }
+
+    // Since the driver will not report whether Super Resolution is engaged, its
+    // cost is the closest available evidence: a GPU near idle during an upscale
+    // is not upscaling. Stale samples are dropped rather than shown as current.
+    function describeGpuLoad() {
+        const l = window.__gpuLoad;
+        if (!l || typeof l.gpu !== 'number') return null;
+        if (Date.now() - l.at > 5000) return null;
+        return `${l.gpu}% (memory ${l.memory}%)`;
     }
 
     // The raw evidence behind the two rows above.
@@ -509,6 +521,8 @@
                 // surprising verdict can be checked rather than taken on trust.
                 const pipeline = describePipeline();
                 if (pipeline) stats.push({ label: 'Pipeline', value: pipeline });
+                const gpu = describeGpuLoad();
+                if (gpu) stats.push({ label: 'GPU load', value: gpu });
                 categories.push({ name: 'RTX Video Enhancement', stats });
             }
             // Directly under the RTX rows, ahead of jellyfin-web's own media info.

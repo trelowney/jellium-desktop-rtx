@@ -22,6 +22,7 @@ windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_System_LibraryLoader",
 ] }
 
 [build-dependencies]
