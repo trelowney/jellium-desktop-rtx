@@ -209,6 +209,19 @@ pub fn jfn_playback_observe_mpv_properties(backend: u8) -> bool {
             c"video-frame-info",
             mpv_format::MPV_FORMAT_NODE,
         ),
+        // The three stages RTX status is derived from: what was decoded, what
+        // the filter chain produced, and what reaches the display.
+        (VIDEO_PARAMS, c"video-params", mpv_format::MPV_FORMAT_NODE),
+        (
+            VIDEO_OUT_PARAMS,
+            c"video-out-params",
+            mpv_format::MPV_FORMAT_NODE,
+        ),
+        (
+            VIDEO_TARGET_PARAMS,
+            c"video-target-params",
+            mpv_format::MPV_FORMAT_NODE,
+        ),
     ];
 
     for &(id, name, fmt) in pairs {
@@ -426,6 +439,85 @@ fn report_rtx_status_from_log(text: &str) {
 /// is also the window `raw-input-rate` is measured over. Fields mpv documents as
 /// "missing if unavailable" are forwarded as `null`; the JS side renders those as
 /// a dash instead of inventing a zero.
+/// One stage of the video pipeline, as the web UI needs it. Everything is
+/// optional: mpv leaves sub-properties out until a frame has been decoded, and
+/// a missing value must read as "unknown" rather than as a claim.
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StageParams {
+    w: Option<i64>,
+    h: Option<i64>,
+    gamma: Option<String>,
+    primaries: Option<String>,
+    pixelformat: Option<String>,
+}
+
+impl StageParams {
+    fn from_node(node: &jfn_mpv::Node) -> Self {
+        let text = |key: &str| {
+            node.get(key)
+                .and_then(jfn_mpv::Node::as_str)
+                .map(str::to_owned)
+        };
+        Self {
+            w: node.get("w").and_then(jfn_mpv::Node::as_int),
+            h: node.get("h").and_then(jfn_mpv::Node::as_int),
+            gamma: text("gamma"),
+            primaries: text("primaries"),
+            pixelformat: text("pixelformat"),
+        }
+    }
+}
+
+/// The three pipeline stages the RTX indicator is derived from. What RTX did is
+/// the difference between them: `d3d11vpp` scaling shows up as `filtered` being
+/// larger than `source`, and an RTX Video HDR conversion shows up as `filtered`
+/// switching to PQ / BT.2020 while `source` is still SDR.
+///
+/// This is the honest ceiling of what can be reported. The driver offers no way
+/// to read back whether Super Resolution is engaged — that was measured, not
+/// assumed — so the web UI presents the observed pipeline rather than a verdict
+/// it cannot support.
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoPipeline {
+    source: StageParams,
+    filtered: StageParams,
+    target: StageParams,
+}
+
+/// Latest parameters seen for each stage. mpv reports the three properties
+/// independently, so they are accumulated here and pushed together — the web UI
+/// can only compare them if it has all three.
+static PIPELINE: parking_lot::Mutex<Option<VideoPipeline>> = parking_lot::Mutex::new(None);
+
+/// Fold one stage's update in and push the whole pipeline to the web UI.
+fn push_video_pipeline(id: u64, value: &PropertyValue) {
+    use crate::ingest::observe_id::{VIDEO_OUT_PARAMS, VIDEO_PARAMS, VIDEO_TARGET_PARAMS};
+
+    let PropertyValue::Node(node) = value else {
+        return;
+    };
+    let stage = StageParams::from_node(node);
+    let snapshot = {
+        let mut guard = PIPELINE.lock();
+        let pipeline = guard.get_or_insert_with(VideoPipeline::default);
+        match id {
+            VIDEO_PARAMS => pipeline.source = stage,
+            VIDEO_OUT_PARAMS => pipeline.filtered = stage,
+            VIDEO_TARGET_PARAMS => pipeline.target = stage,
+            _ => return,
+        }
+        pipeline.clone()
+    };
+    let Some(json) = jfn_js_json::to_js_json(&snapshot) else {
+        return;
+    };
+    crate::exec_js::call(&format!(
+        "window._nativeVideoPipeline&&window._nativeVideoPipeline({json})"
+    ));
+}
+
 /// The buffer figures handed to the web UI. Fields mpv documents as "missing if
 /// unavailable" stay `Option`, so the JS side can render a dash instead of
 /// inventing a zero.
@@ -530,6 +622,14 @@ fn ingest_events(rx: Receiver<Event>) {
             }
             if id == crate::ingest::observe_id::CACHE_STATE {
                 push_buffer_stats(value);
+            }
+            if matches!(
+                id,
+                crate::ingest::observe_id::VIDEO_PARAMS
+                    | crate::ingest::observe_id::VIDEO_OUT_PARAMS
+                    | crate::ingest::observe_id::VIDEO_TARGET_PARAMS
+            ) {
+                push_video_pipeline(id, value);
             }
         }
         let ctx = CallerCtx {

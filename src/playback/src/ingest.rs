@@ -35,6 +35,13 @@ pub mod observe_id {
     pub const CORE_IDLE: u64 = 14;
     pub const VIDEO_FRAME_INFO: u64 = 15;
     pub const WINDOW_ID: u64 = 16;
+    /// Decoded frame parameters, before any video filter runs.
+    pub const VIDEO_PARAMS: u64 = 17;
+    /// Frame parameters after the filter chain — i.e. after `d3d11vpp`. The
+    /// difference between this and [`VIDEO_PARAMS`] is what RTX actually did.
+    pub const VIDEO_OUT_PARAMS: u64 = 18;
+    /// What the video output hands to the display.
+    pub const VIDEO_TARGET_PARAMS: u64 = 19;
 }
 
 const MAX_BUFFERED_RANGES: usize = 8;
