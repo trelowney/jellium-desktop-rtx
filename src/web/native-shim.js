@@ -415,6 +415,13 @@
         stats.at = Date.now();
         window.__bufferStats = stats;
     };
+    // Frame parameters at three points in the pipeline: as decoded (source),
+    // after the filter chain (filtered, i.e. after d3d11vpp), and as handed to
+    // the display (target). What RTX actually did is the difference between
+    // them, which is the only observable evidence the driver leaves behind.
+    window._nativeVideoPipeline = function(pipeline) {
+        window.__videoPipeline = pipeline;
+    };
 
     // window.NativeShell - app info and plugins
     const plugins = ['mpvVideoPlayer', 'mpvAudioPlayer', 'inputPlugin'];
