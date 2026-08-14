@@ -78,8 +78,11 @@ jobs:
           BINDGEN_EXTRA_CLANG_ARGS: --target=${{ matrix.triple }}
           MATRIX_ARCH: ${{ matrix.arch }}
           # Embed the release tag so the in-app updater can compare exactly.
-          # Empty for non-tag runs, which disables the update check.
-          JFN_RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          # Empty for non-tag runs, which disables the update check. Also empty
+          # for pre-release tags (any tag with a '-' suffix, e.g. v1.2.3-rc1):
+          # the updater treats "different tag" as "newer", so a test build would
+          # otherwise offer the previous stable release as an update.
+          JFN_RELEASE_TAG: ${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') && github.ref_name || '' }}
         run: |
           for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "VSINSTALL=%%i"
           call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" %MATRIX_ARCH% || exit /b 1
@@ -97,6 +100,9 @@ jobs:
         shell: bash
         run: |
           ver="${GITHUB_REF_NAME#v}"
+          # A pre-release suffix (v2026.08.14-rc1) has no changelog section of
+          # its own; match the version it is a candidate for.
+          ver="${ver%%-*}"
           header=$(echo "$ver" | sed -E 's/^([0-9]+)\.([0-9]+)\.([0-9]+)/\1-\2-\3/')
           awk -v h="## $header" '
             $0==h {f=1; next}
@@ -117,6 +123,10 @@ jobs:
           files: dist/JelliumDesktop-*.zip
           fail_on_unmatched_files: true
           body_path: RELEASE_NOTES.md
+          # A '-' suffix marks a test build. GitHub's "latest release" endpoint
+          # skips pre-releases, and that endpoint is what the in-app updater
+          # polls — so a test tag stays invisible to everyone else's installs.
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   # Clean up after ourselves: the build creates Actions caches (CEF ~hundreds
   # of MB + MSYS2 packages) that otherwise linger against the repo cache quota.
