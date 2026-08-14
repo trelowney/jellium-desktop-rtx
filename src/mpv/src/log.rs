@@ -2,6 +2,22 @@
 
 use crate::event::LogMessage;
 use crate::sys;
+use std::sync::OnceLock;
+
+/// Optional process-global tap on the mpv log stream.
+///
+/// The event loop forwards log messages straight to `tracing` and never hands
+/// them to event consumers, but the RTX status indicator has to read
+/// `d3d11vpp`'s own success/failure lines — mpv reports the outcome of RTX
+/// Super Resolution and RTX Video HDR only in its log. Installed once by
+/// `jfn_playback`; a no-op in every build that never registers one.
+static OBSERVER: OnceLock<fn(&LogMessage)> = OnceLock::new();
+
+/// Install the log observer. Later calls are ignored, so the first registration
+/// wins and the hook can't be swapped out from under a running event loop.
+pub fn set_observer(observer: fn(&LogMessage)) {
+    let _ = OBSERVER.set(observer);
+}
 
 /// libmpv log severities, in the order libmpv defines them. `Off` disables
 /// subscription.
@@ -57,6 +73,9 @@ impl LogLevel {
 /// the console isn't flooded at default verbosity. Unknown/`trace`
 /// levels surface as WARN with an unhandled-level marker.
 pub fn forward_to_tracing(msg: &LogMessage) {
+    if let Some(observer) = OBSERVER.get() {
+        observer(msg);
+    }
     let text = msg.text.trim_end_matches(['\r', '\n']);
     let prefix = msg.prefix.as_str();
     match msg.level {

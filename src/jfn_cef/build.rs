@@ -3,7 +3,7 @@ use std::path::PathBuf;
 /// Upstream jellium-desktop commit this RTX fork is currently based on.
 /// Bump this whenever the fork is re-synced onto a newer upstream version, so
 /// the in-app version keeps showing which original build it was made from.
-const UPSTREAM_BASE: &str = "f3ba9cd";
+const UPSTREAM_BASE: &str = "28f2cf1";
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

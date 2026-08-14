@@ -8,12 +8,12 @@
 //! cross-process payload, so we don't hold a long-lived reference.
 
 use cef::{
-    CefString, CefStringUserfreeUtf16, DictionaryValue, ImplDictionaryValue, ImplListValue,
-    dictionary_value_create, list_value_create, sys,
+    CefString, DictionaryValue, ImplDictionaryValue, ImplListValue, dictionary_value_create,
+    list_value_create,
 };
-use jfn_platform_abi::{
-    ContextMenuBackend, ContextMenuScript, DropdownBackend, DropdownScript, WindowDecorations,
-};
+
+use crate::cef_string::userfree_to_string;
+use jfn_platform_abi::{MenuKind, MenuScript, WindowDecorations};
 use std::os::raw::c_char;
 use std::sync::OnceLock;
 
@@ -62,8 +62,6 @@ pub(crate) enum NativeFunction {
     WindowStartMove,
     WindowStartResize,
     CsdReady,
-    MenuItemSelected,
-    MenuDismissed,
     ApplyUpdate,
 }
 
@@ -113,8 +111,6 @@ impl NativeFunction {
             "windowStartMove" => Self::WindowStartMove,
             "windowStartResize" => Self::WindowStartResize,
             "csdReady" => Self::CsdReady,
-            "menuItemSelected" => Self::MenuItemSelected,
-            "menuDismissed" => Self::MenuDismissed,
             "applyUpdate" => Self::ApplyUpdate,
             _ => return None,
         })
@@ -165,8 +161,6 @@ impl NativeFunction {
             Self::WindowStartMove => "windowStartMove",
             Self::WindowStartResize => "windowStartResize",
             Self::CsdReady => "csdReady",
-            Self::MenuItemSelected => "menuItemSelected",
-            Self::MenuDismissed => "menuDismissed",
             Self::ApplyUpdate => "applyUpdate",
         }
     }
@@ -181,7 +175,6 @@ pub(crate) enum InjectedScript {
     InputPlugin,
     ClientSettings,
     Csd,
-    ContextMenu,
     SelectMenu,
 }
 
@@ -195,7 +188,6 @@ impl InjectedScript {
             "input-plugin.js" => Self::InputPlugin,
             "client-settings.js" => Self::ClientSettings,
             "csd.js" => Self::Csd,
-            "context-menu.js" => Self::ContextMenu,
             "select-menu.js" => Self::SelectMenu,
             _ => return None,
         })
@@ -210,20 +202,13 @@ impl InjectedScript {
             Self::InputPlugin => "input-plugin.js",
             Self::ClientSettings => "client-settings.js",
             Self::Csd => "csd.js",
-            Self::ContextMenu => "context-menu.js",
             Self::SelectMenu => "select-menu.js",
         }
     }
 
-    fn from_dropdown(script: DropdownScript) -> Self {
+    fn from_menu(script: MenuScript) -> InjectedScript {
         match script {
-            DropdownScript::SelectMenu => Self::SelectMenu,
-        }
-    }
-
-    fn from_context_menu(script: ContextMenuScript) -> Self {
-        match script {
-            ContextMenuScript::ContextMenu => Self::ContextMenu,
+            MenuScript::SelectMenu => Self::SelectMenu,
         }
     }
 }
@@ -444,19 +429,6 @@ fn write_string_list<'a>(
     Some(())
 }
 
-fn userfree_to_string(s: &CefStringUserfreeUtf16) -> String {
-    let raw: Option<&sys::_cef_string_utf16_t> = s.into();
-    raw.map(|r| {
-        if r.str_.is_null() || r.length == 0 {
-            String::new()
-        } else {
-            let slice = unsafe { std::slice::from_raw_parts(r.str_, r.length) };
-            String::from_utf16_lossy(slice)
-        }
-    })
-    .unwrap_or_default()
-}
-
 /// Set the cached Jellyfin device-profile JSON. Called once at startup
 /// after mpv capabilities are queried. Returns silently if already set.
 ///
@@ -477,34 +449,17 @@ pub unsafe fn jfn_cef_set_device_profile_json(json_utf8: *const c_char, len: usi
 fn build_extra_info(
     functions: &[NativeFunction],
     scripts: &[InjectedScript],
-    add_ctx_menu: bool,
     add_window: bool,
     shared_textures_enabled: bool,
-    ctx_menu: &'static dyn ContextMenuBackend,
 ) -> ExtraInfo {
     let mut functions = functions.to_vec();
     if add_window {
         functions.extend_from_slice(WINDOW_FUNCTIONS);
     }
-    if add_ctx_menu {
-        functions.extend_from_slice(&[
-            NativeFunction::MenuItemSelected,
-            NativeFunction::MenuDismissed,
-        ]);
-    }
 
     let mut scripts = scripts.to_vec();
     if add_window {
         scripts.push(InjectedScript::Csd);
-    }
-    if add_ctx_menu {
-        scripts.extend(
-            ctx_menu
-                .scripts()
-                .iter()
-                .copied()
-                .map(InjectedScript::from_context_menu),
-        );
     }
 
     ExtraInfo {
@@ -517,23 +472,11 @@ fn build_extra_info(
     }
 }
 
-pub(crate) fn build_for_kind(
-    kind: &str,
-    add_ctx_menu: bool,
-    shared_textures_enabled: bool,
-    dropdown: &'static dyn DropdownBackend,
-    ctx_menu: &'static dyn ContextMenuBackend,
-) -> Option<ExtraInfo> {
+pub(crate) fn build_for_kind(kind: &str, shared_textures_enabled: bool) -> Option<ExtraInfo> {
     match kind {
         "web" => {
-            let mut extra_info = build_extra_info(
-                WEB_FUNCTIONS,
-                WEB_SCRIPTS,
-                add_ctx_menu,
-                true,
-                shared_textures_enabled,
-                ctx_menu,
-            );
+            let mut extra_info =
+                build_extra_info(WEB_FUNCTIONS, WEB_SCRIPTS, true, shared_textures_enabled);
             if let Some(json) = DEVICE_PROFILE_JSON.get()
                 && !json.is_empty()
             {
@@ -547,29 +490,24 @@ pub(crate) fn build_for_kind(
                     p.window_decoration_options().iter().collect();
             }
             extra_info.scripts.extend(
-                dropdown
-                    .scripts()
+                jfn_platform_abi::menu_scripts(MenuKind::Dropdown)
                     .iter()
                     .copied()
-                    .map(InjectedScript::from_dropdown),
+                    .map(InjectedScript::from_menu),
             );
             Some(extra_info)
         }
         "overlay" => Some(build_extra_info(
             OVERLAY_FUNCTIONS,
             &[],
-            add_ctx_menu,
             true,
             shared_textures_enabled,
-            ctx_menu,
         )),
         "about" => Some(build_extra_info(
             ABOUT_FUNCTIONS,
             &[],
-            add_ctx_menu,
             true,
             shared_textures_enabled,
-            ctx_menu,
         )),
         _ => None,
     }
