@@ -3,6 +3,14 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-08-15
+
+### Fixed
+- **Dropdowns open again on Windows.** No `<select>` anywhere in the app would open its menu — not in Settings, not on any page. CEF renders off-screen, so a select's popup is not drawn into the page; it is handed to the app to place and paint. Windows was the only platform doing that through its own composited surface, and that surface never produced a visible menu, with GPU compositing both on and off. Dropdowns now go through the same Win32 menu host that already served context menus, which is what macOS and Wayland have always used. Verified end to end before release: popup shown → size received → options returned over IPC → menu drawn with the right items and the current one selected.
+
+### Added
+- **The popup path logs what it is doing.** It previously had no logging at all, so diagnosing the bug above meant reading source rather than a log. The four decisive points — popup shown, popup size, the option list coming back from the renderer, and which delivery opened the menu (or which of its three preconditions is still missing) — now report under the `menu` target. Run with `--log-level "info,menu=debug"`; on Windows the log is `%LOCALAPPDATA%\jellium-desktop-rtx\Logs\jellium-desktop.log`.
+
 ## 2026-08-14
 
 ### Added
