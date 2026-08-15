@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-08-15.1
+
+### Fixed
+- **Windows dropdowns look like the app again.** The previous build fixed them by handing them to the Win32 menu host, which works but draws a grey system menu that belongs to a different decade and matches nothing around it. They now render in the page through `select-menu.js`, the same path X11 uses — dark, rounded, with the current option in bold. Context menus keep the native Win32 host.
+
 ## 2026-08-15
 
 ### Fixed
