@@ -2346,6 +2346,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slotmap",
+ "tracing",
  "windows",
 ]
 
