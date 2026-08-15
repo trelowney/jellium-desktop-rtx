@@ -193,7 +193,11 @@ impl Platform for WindowsPlatform {
     fn menu_delivery(&self, kind: MenuKind) -> MenuDelivery {
         match kind {
             MenuKind::ContextMenu => MenuDelivery::Host(&menu::WinMenuHost),
-            MenuKind::Dropdown => MenuDelivery::Composited,
+            // Dropdowns go through the same Win32 menu host as context menus,
+            // matching macOS and Wayland. The composited path this replaces
+            // depended on CEF delivering popup layers through OnPaint, which
+            // never produced a visible menu here.
+            MenuKind::Dropdown => MenuDelivery::Host(&menu::WinMenuHost),
         }
     }
 

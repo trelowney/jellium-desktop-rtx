@@ -39,6 +39,7 @@ impl Inner {
     }
 
     pub(crate) fn on_popup_show(&self, show: bool) {
+        tracing::debug!(target: "menu", "OnPopupShow({show})");
         {
             let mut p = self.popup.lock();
             p.visible = show;
@@ -55,6 +56,7 @@ impl Inner {
     }
 
     pub(crate) fn on_popup_size(self: &Arc<Self>, x: i32, y: i32, w: i32, h: i32) {
+        tracing::debug!(target: "menu", "OnPopupSize({x},{y} {w}x{h})");
         {
             let mut p = self.popup.lock();
             p.x = x;
@@ -73,6 +75,12 @@ impl Inner {
         selectable: Vec<i32>,
         anchor: Option<(i32, i32)>,
     ) {
+        tracing::debug!(
+            target: "menu",
+            "popupOptions reply: {} options, selected {selected}, {} selectable, anchor {anchor:?}",
+            opts.len(),
+            selectable.len(),
+        );
         {
             let mut p = self.popup.lock();
             p.options = opts;
@@ -88,6 +96,11 @@ impl Inner {
         let (x, y, w, h, opts, selected, selectable) = {
             let p = self.popup.lock();
             if !p.visible || !p.size_received || !p.options_received {
+                tracing::debug!(
+                    target: "menu",
+                    "try_show_popup waiting: visible={} size={} options={}",
+                    p.visible, p.size_received, p.options_received,
+                );
                 return;
             }
             // Blink's popup rect (p.x/p.y) flips above the element near the
@@ -106,8 +119,19 @@ impl Inner {
 
         let surface = self.surface_handle();
         if surface.is_none() {
+            tracing::debug!(target: "menu", "try_show_popup: no surface, dropping menu");
             return;
         }
+        tracing::debug!(
+            target: "menu",
+            "opening dropdown via {} at {x},{y} {w}x{h}, {} items",
+            match self.dropdown {
+                MenuDelivery::Host(_) => "host",
+                MenuDelivery::Composited => "composited",
+                MenuDelivery::Page => "page",
+            },
+            opts.len(),
+        );
         let inner = Arc::clone(self);
         let on_selected = MenuSelection::new(move |idx| {
             let mut task = DispatchPopupTask::new(inner, idx, selected, selectable.clone());
