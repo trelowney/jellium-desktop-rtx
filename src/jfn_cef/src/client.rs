@@ -212,6 +212,13 @@ impl Inner {
         self.name.lock().clone()
     }
 
+    /// True for the browser hosting jellyfin-web, false for the connect
+    /// overlay and the About window. Menu entries that only make sense
+    /// against the server (reload, cache) gate on this.
+    pub(crate) fn is_web(&self) -> bool {
+        *self.name.lock() == "web"
+    }
+
     pub(crate) fn set_layer_ptr(&self, p: *mut JfnCefLayer) {
         self.layer_ptr.store(p, Ordering::Release);
     }

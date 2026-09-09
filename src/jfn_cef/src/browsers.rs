@@ -247,6 +247,16 @@ pub(crate) fn jfn_browsers_menu_resolve(h: Handle) -> bool {
         .unwrap_or(false)
 }
 
+/// Clear the HTTP cache and hard-reload whichever browser currently owns
+/// input — that is the one the context menu was opened on.
+pub(crate) fn clear_cache_and_reload_active() {
+    let layer = jfn_browsers_active();
+    if layer.is_null() {
+        return;
+    }
+    unsafe { jfn_cef_layer_inner(layer) }.clear_http_cache_and_reload();
+}
+
 pub fn jfn_browsers_active() -> *mut JfnCefLayer {
     INSTANCE
         .lock()

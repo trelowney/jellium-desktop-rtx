@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-09-10
+
+### Added
+- **Hard Reload and Clear Cache and Reload in the right-click menu.** Plain *Reload* is not always enough to pick up a changed `index.html`: it revalidates, the server answers `304 Not Modified`, and Chromium keeps serving the document it already had. A server-side plugin that starts injecting a `<script>` into the page — a rating overlay, a custom theme — is then invisible in the app while a browser on the same machine shows it, and no amount of reloading changes that. **Hard Reload** refetches the document and every subresource, ignoring the cache. **Clear Cache and Reload** additionally drops the whole HTTP cache before reloading; it clears the network cache only, so cookies and Local Storage — and with them the server login — are left alone. Both entries sit next to *Reload*, and only on the browser showing the server, not on the connect screen or the About window.
+
 ## 2026-08-15.1
 
 ### Fixed

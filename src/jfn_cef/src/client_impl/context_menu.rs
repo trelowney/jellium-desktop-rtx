@@ -42,6 +42,22 @@ wrap_context_menu_handler! {
             if m.index_of(reload_id) < 0 {
                 m.add_item(reload_id, Some(&CefString::from("Reload")));
             }
+            // Reload alone can keep serving a stale index.html: it revalidates,
+            // the server answers 304 and Chromium keeps the cached document,
+            // so a newly injected plugin script is never seen. Offer the two
+            // escapes next to it, on the server-backed browser only.
+            if self.inner.is_web() {
+                let hard_reload_id: c_int = MenuId::RELOAD_NOCACHE.get_raw() as c_int;
+                if m.index_of(hard_reload_id) < 0 {
+                    m.add_item(hard_reload_id, Some(&CefString::from("Hard Reload")));
+                }
+                if m.index_of(crate::app_menu::MENU_ID_CLEAR_CACHE) < 0 {
+                    m.add_item(
+                        crate::app_menu::MENU_ID_CLEAR_CACHE,
+                        Some(&CefString::from("Clear Cache and Reload")),
+                    );
+                }
+            }
             loop {
                 let n = m.count();
                 if n == 0 {

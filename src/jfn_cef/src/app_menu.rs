@@ -13,6 +13,10 @@ const MENU_ID_USER_FIRST: c_int = sys::cef_menu_id_t::MENU_ID_USER_FIRST as c_in
 pub const MENU_ID_TOGGLE_FULLSCREEN: c_int = MENU_ID_USER_FIRST;
 pub const MENU_ID_ABOUT: c_int = MENU_ID_USER_FIRST + 1;
 pub const MENU_ID_EXIT: c_int = MENU_ID_USER_FIRST + 2;
+/// Added next to the built-in Reload entries by the context-menu handler,
+/// not by [`build_closure`] — it belongs with reloading, not with the
+/// app-level items at the bottom of the menu.
+pub const MENU_ID_CLEAR_CACHE: c_int = MENU_ID_USER_FIRST + 3;
 
 use jfn_playback::shutdown::jfn_shutdown_initiate;
 
@@ -47,6 +51,9 @@ pub fn dispatch_closure() -> Box<crate::client::ContextDispatcherFn> {
             true
         } else if cmd == MENU_ID_EXIT {
             jfn_shutdown_initiate();
+            true
+        } else if cmd == MENU_ID_CLEAR_CACHE {
+            crate::browsers::clear_cache_and_reload_active();
             true
         } else {
             false
