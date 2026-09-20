@@ -1,6 +1,10 @@
 //! Hwdec mode policy: which mpv hardware-decode backends each OS offers.
 
-pub const HWDEC_DEFAULT: &str = "no";
+// RTX fork: mpv's own default is `no` (software decoding), which upstream now
+// shows honestly instead of the "auto" the old HTML settings pretended. With
+// RTX enabled the boot code forces `d3d11va` regardless; with it off, `auto`
+// is the sane default for a client whose users play 4K HEVC.
+pub const HWDEC_DEFAULT: &str = "auto";
 
 #[expect(
     dead_code,
@@ -95,7 +99,7 @@ mod tests {
     /// (default)". The settings view shows this value for an unset setting.
     #[test]
     fn default_is_mpv_software_decoding() {
-        assert_eq!(Hwdec::default().as_str(), "no");
+        assert_eq!(Hwdec::default().as_str(), "auto");
     }
 
     #[test]

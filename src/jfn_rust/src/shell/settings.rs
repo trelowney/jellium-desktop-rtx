@@ -25,6 +25,9 @@ pub const DEVICE_NAME_FIELD: Id = Id::new("shell-settings-device-name");
 pub const LOG_LEVEL_CONTROL: Id = Id::new("shell-settings-log-level");
 pub const OPEN_MPV_CONFIG_CONTROL: Id = Id::new("shell-settings-open-mpv-config");
 pub const RESET_SERVER_CONTROL: Id = Id::new("shell-settings-reset-server");
+pub const SAVE_CONTROL: Id = Id::new("shell-settings-save");
+
+pub const SAVE_LABEL: &str = "Save and close";
 
 pub const TITLE: &str = "Settings";
 pub const CLOSE_LABEL: &str = "Close Settings";
@@ -57,6 +60,10 @@ pub enum Message {
     LogLevelChanged(String),
     OpenMpvConfigDirectory,
     ResetSavedServer,
+    /// Every change is already saved as it is made; this commits the text
+    /// drafts, writes the file synchronously and closes the overlay, for
+    /// people who want an explicit "done".
+    SaveAndClose,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -269,6 +276,8 @@ impl Settings {
                 ));
         }
 
+        controls = controls.push(self.action(SAVE_CONTROL, SAVE_LABEL, Message::SaveAndClose));
+
         scrollable(controls)
             .id(SETTINGS_SCROLL)
             .height(Length::Fill)
@@ -358,6 +367,12 @@ impl Settings {
                 jfn_config::set_server_url("");
                 jfn_config::settings_save_async();
                 return Outcome::ResetSavedServer;
+            }
+            Message::SaveAndClose => {
+                self.commit_text(Message::CommitAudioPassthrough);
+                self.commit_text(Message::CommitDeviceName);
+                jfn_config::settings_save();
+                return Outcome::Dismiss;
             }
         }
         jfn_config::settings_save_async();
@@ -503,6 +518,7 @@ fn control_order(display: DisplayBackend, decorations: bool, server: bool) -> Ve
     if server {
         ids.extend([OPEN_MPV_CONFIG_CONTROL, RESET_SERVER_CONTROL]);
     }
+    ids.push(SAVE_CONTROL);
     ids
 }
 
@@ -683,6 +699,7 @@ mod tests {
                 LOG_LEVEL_CONTROL,
                 OPEN_MPV_CONFIG_CONTROL,
                 RESET_SERVER_CONTROL,
+                SAVE_CONTROL,
             ]
         );
         assert_eq!(
@@ -698,6 +715,7 @@ mod tests {
                 HIDE_SCROLLBAR_CONTROL,
                 DEVICE_NAME_FIELD,
                 LOG_LEVEL_CONTROL,
+                SAVE_CONTROL,
             ]
         );
     }
@@ -716,6 +734,7 @@ mod tests {
     fn display_copy_and_explicit_dismissal_are_stable() {
         assert_eq!(TITLE, "Settings");
         assert_eq!(CLOSE_LABEL, "Close Settings");
+        assert_eq!(SAVE_LABEL, "Save and close");
         assert_eq!(Settings::testing().dismiss(), Outcome::Dismiss);
     }
 }

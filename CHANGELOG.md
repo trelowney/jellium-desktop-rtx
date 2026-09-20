@@ -5,12 +5,19 @@ published from the matching section below.
 
 ## 2026-09-20
 
-### Changed
+### Changed (upstream)
 - **Re-synced onto upstream jellium-desktop `14dc084`** (2026-09-19), which brings the upstream's rewrite of the native UI: the client settings, the About panel and the connect screen are now drawn natively (Iced + wgpu) instead of as HTML pages inside the browser, so Settings opens before a server is connected and no longer depends on jellyfin-web. Also from upstream: a reworked CEF lifecycle/navigation, hardware decoding stored as a typed setting, event-driven startup and Linux backend refactors, and dependency bumps (`dirs` 7, `interprocess` 2.4.4, `windows-future` 0.100).
 - **Every fork feature was carried across the rewrite.** *Buffer Size* and the two *RTX* toggles now live in the native Settings → Playback group (the RTX toggles are shown on Windows only, as before); *Check for updates* is a button on the About tab; the right-click menu keeps *Hard Reload* and *Clear Cache and Reload*; the in-page `<select>` dropdowns, the subtitle-offset fix, the truthful RTX rows and live buffer stats in Playback Info, the GPU-load readout, the NVIDIA guard, the separate data directory and the self-updater are unchanged.
 - The context menu's *About* entry is now *Settings* (upstream change); About is a tab inside it.
 
+### Added
+- **Save and close** button at the bottom of Settings. Every change is still saved the moment it is made; the button commits the text fields, writes the file synchronously and closes the overlay, for an explicit "done".
+
+### Changed
+- **Hardware decoding defaults to `auto`** (upstream: `no`, i.e. software decoding). With RTX enabled the client forces `d3d11va` anyway; with it off, `auto` is the sensible default for 4K HEVC. The setting shows the mode mpv is actually given — the old settings page showed "auto" while mpv ran with `no`.
+
 ### Fixed
+- **Settings overlay could not be closed on Windows.** Closing it worked — the model closed, clicks went to jellyfin-web again — but the overlay's last frame stayed painted on screen. The Windows compositor created its DirectComposition device with the v1 `DCompositionCreateDevice`, whose visuals do not implement `IDCompositionVisual3`; every `SetVisible` call failed with `E_NOINTERFACE` (the log filled with "IDCompositionVisual3 unavailable"), so no layer could ever be hidden. The device is now created with `DCompositionCreateDevice3`. Upstream `main` has the same bug.
 - **Startup on Windows.** Upstream's current `main` exits immediately on Windows ("Windows window acquisition: no observed mpv window-id", upstream #694): after the startup rework the platform is initialised before mpv's window exists. Carries upstream PR #699, which falls back to reading mpv's `window-id` property directly and waits up to 5 s for the window.
 
 ## 2026-09-10

@@ -383,6 +383,7 @@ fn settings_overlay_dismiss_last(messages: Vec<Message>) -> Vec<Message> {
                 crate::shell::settings_overlay::Message::Dismiss
                     | crate::shell::settings_overlay::Message::Settings(
                         crate::shell::settings::Message::ResetSavedServer
+                            | crate::shell::settings::Message::SaveAndClose
                     )
             ))
         )
