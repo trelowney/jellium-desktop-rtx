@@ -16,6 +16,7 @@ A personal fork of [**jellium-desktop**](https://github.com/andrewrabert/jellium
 - **Separate data directory** — stores settings/cache/logs under `jellium-desktop-rtx`, so it won't clash with an installed stock jellyfin-desktop. On first run it **migrates settings from the stock install** (if present), so you don't have to log in / reconfigure.
 - **Buffer size is configurable** — Settings → Playback lets you pick how much of the stream to buffer ahead (32 MB – 4 GB, default 256 MB), the setting Jellyfin Media Player had and upstream dropped.
 - **Playback Info shows the buffer live** — how much is buffered of the configured limit, how much playback time that covers, the current fill rate, and what the buffer is doing (filling / full / underrun).
+- **Logo in the player** — the video OSD shows the series' (or movie's) clear logo under the title line, using the logo Jellyfin already fetched for the item.
 - **Distinct branding** — green icon and "Jellium Desktop RTX" title, so it's obvious which build is running.
 - **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-09-20 (<commit>) - base jellium-desktop 0.1.0-dev@14dc084`, so you always know the build date and which upstream commit it was made from.
 

@@ -186,6 +186,87 @@
         };
     }
 
+    // ---- Clear logo under the OSD title -----------------------------------
+    // jellyfin-web titles the video OSD with plain text
+    // ("Neagley - S1:E6 - Rocked (2026)"). The server usually has the series'
+    // or movie's clear logo too, so hang that under the title line, the way
+    // Stremio does. The text is left untouched: in jellyfin-web 12 it is React
+    // state inside VideoPage's toolbar, and a sibling inserted after the
+    // toolbar is something React never reconciles. The header (.osdHeader) is
+    // 7.5em tall with a top gradient and fades with the OSD, so the logo needs
+    // no show/hide plumbing of its own; the node dies with the page.
+    const OSD_LOGO_CLASS = 'rtxOsdLogo';
+    const OSD_LOGO_HEIGHT_PX = 240;  // requested from the server; CSS scales it down
+
+    // Episodes carry their series' logo as ParentLogo*; movies (and series
+    // played directly) carry it in their own ImageTags.
+    function osdLogoSource(item) {
+        if (!item) return null;
+        if (item.ParentLogoItemId && item.ParentLogoImageTag) {
+            return { id: item.ParentLogoItemId, tag: item.ParentLogoImageTag };
+        }
+        const tag = item.ImageTags?.Logo;
+        return tag ? { id: item.Id, tag } : null;
+    }
+
+    function osdLogoUrl(src, mediaUrl) {
+        let base = window.ApiClient?.serverAddress?.();
+        if (!base && mediaUrl) {
+            try { base = new URL(mediaUrl, location.href).origin; } catch { base = null; }
+        }
+        if (!base) return null;
+        const q = new URLSearchParams({ tag: src.tag, maxHeight: String(OSD_LOGO_HEIGHT_PX), quality: '90' });
+        return `${base.replace(/\/$/, '')}/Items/${src.id}/Images/Logo?${q}`;
+    }
+
+    function removeOsdLogo() {
+        for (const el of document.querySelectorAll('.' + OSD_LOGO_CLASS)) el.remove();
+    }
+
+    // `.videoOsd-appBar` is the React toolbar (jellyfin-web 12), `.headerTop`
+    // the legacy skin header. The OSD controller also tags the (hidden) legacy
+    // skin header with .osdHeader on the React layout, so pick the one that is
+    // actually laid out. Retries across frames: the title event can land while
+    // the OSD page is still mounting.
+    function findOsdHeader() {
+        for (const header of document.querySelectorAll('.osdHeader')) {
+            const toolbar = header.querySelector('.videoOsd-appBar, .headerTop');
+            if (toolbar && header.offsetWidth > 0) return { header, toolbar };
+        }
+        return null;
+    }
+
+    function placeOsdLogo(url, attempt = 0) {
+        const found = findOsdHeader();
+        if (!found) {
+            if (attempt < 60) requestAnimationFrame(() => placeOsdLogo(url, attempt + 1));
+            return;
+        }
+        const { header, toolbar } = found;
+        const existing = header.querySelector('.' + OSD_LOGO_CLASS);
+        if (existing?.dataset.url === url) return;
+        removeOsdLogo();
+
+        // Line the logo up with the title text, not with the back arrow.
+        const title = toolbar.querySelector('.MuiTypography-root, .pageTitle');
+        const left = title
+            ? Math.max(0, Math.round(title.getBoundingClientRect().left - header.getBoundingClientRect().left))
+            : 0;
+
+        const box = document.createElement('div');
+        box.className = OSD_LOGO_CLASS;
+        box.dataset.url = url;
+        box.style.cssText = `padding:0.35em 1em 0 ${left}px;pointer-events:none;`;
+        const img = document.createElement('img');
+        img.alt = '';
+        img.draggable = false;
+        img.style.cssText = 'display:block;height:3.4em;max-width:26em;object-fit:contain;object-position:left center;filter:drop-shadow(0 2px 4px rgba(0,0,0,.7));';
+        img.addEventListener('error', () => box.remove());
+        img.src = url;
+        box.appendChild(img);
+        toolbar.insertAdjacentElement('afterend', box);
+    }
+
     class mpvVideoPlayer extends window.MpvPlayerBase {
         constructor(args) {
             super(args);
@@ -210,6 +291,12 @@
             this.isFetching = false;
 
             window._mpvVideoPlayerInstance = this;
+
+            // jellyfin-web's Events bus keeps listeners in obj._callbacks and
+            // the OSD announces its title on `document`; register the same way
+            // Events.on would, since the module itself is not reachable here.
+            const bus = (document._callbacks = document._callbacks || {});
+            (bus.VIDEO_TITLE_CHANGE = bus.VIDEO_TITLE_CHANGE || []).push((_e, title) => this.onOsdTitleChange(title));
 
             this._videoDialog = undefined;
             this._currentSrc = undefined;
@@ -391,6 +478,14 @@
             }
             const relIdx = getRelativeIndexByType(streams, index, 'Audio');
             window.api.player.setAudioStream(relIdx != null ? relIdx : MpvPlayerBase.TRACK_DISABLE);
+        }
+
+        // Empty title = OSD cleared (stop, or a player without an item).
+        onOsdTitleChange(title) {
+            const src = title ? osdLogoSource(this._currentPlayOptions?.item) : null;
+            const url = src ? osdLogoUrl(src, this._currentSrc) : null;
+            if (url) placeOsdLogo(url);
+            else removeOsdLogo();
         }
 
         stop(destroyPlayer) {
