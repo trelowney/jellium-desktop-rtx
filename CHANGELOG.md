@@ -10,6 +10,9 @@ published from the matching section below.
 - **Every fork feature was carried across the rewrite.** *Buffer Size* and the two *RTX* toggles now live in the native Settings → Playback group (the RTX toggles are shown on Windows only, as before); *Check for updates* is a button on the About tab; the right-click menu keeps *Hard Reload* and *Clear Cache and Reload*; the in-page `<select>` dropdowns, the subtitle-offset fix, the truthful RTX rows and live buffer stats in Playback Info, the GPU-load readout, the NVIDIA guard, the separate data directory and the self-updater are unchanged.
 - The context menu's *About* entry is now *Settings* (upstream change); About is a tab inside it.
 
+### Fixed
+- **Startup on Windows.** Upstream's current `main` exits immediately on Windows ("Windows window acquisition: no observed mpv window-id", upstream #694): after the startup rework the platform is initialised before mpv's window exists. Carries upstream PR #699, which falls back to reading mpv's `window-id` property directly and waits up to 5 s for the window.
+
 ## 2026-09-10
 
 ### Added
