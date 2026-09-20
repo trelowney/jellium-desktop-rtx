@@ -11,6 +11,9 @@ use crate::shell::theme::{self, Theme};
 pub const SETTINGS_SCROLL: Id = Id::new("shell-settings-scroll");
 pub const CLOSE_CONTROL: Id = Id::new("shell-settings-close");
 pub const HARDWARE_DECODING_CONTROL: Id = Id::new("shell-settings-hardware-decoding");
+pub const BUFFER_SIZE_CONTROL: Id = Id::new("shell-settings-buffer-size");
+pub const RTX_VSR_CONTROL: Id = Id::new("shell-settings-rtx-vsr");
+pub const RTX_HDR_CONTROL: Id = Id::new("shell-settings-rtx-hdr");
 pub const AUDIO_PASSTHROUGH_FIELD: Id = Id::new("shell-settings-audio-passthrough");
 pub const EXCLUSIVE_AUDIO_CONTROL: Id = Id::new("shell-settings-exclusive-audio");
 pub const CHANNEL_LAYOUT_CONTROL: Id = Id::new("shell-settings-channel-layout");
@@ -38,6 +41,9 @@ pub const SECTION_TITLES: [&str; 6] = [
 #[derive(Clone, Debug)]
 pub enum Message {
     HardwareDecodingChanged(String),
+    BufferSizeChanged(i32),
+    RtxVsrChanged(bool),
+    RtxHdrChanged(bool),
     AudioPassthroughEdited(String),
     CommitAudioPassthrough,
     ExclusiveAudioOutputChanged(bool),
@@ -97,19 +103,55 @@ impl Settings {
         let audio_channels = jfn_config::audio_channels();
         let log_level = jfn_config::log_level();
 
+        let mut playback = column![self.selection(
+            "Hardware Decoding",
+            controls::select(
+                HARDWARE_DECODING_CONTROL,
+                hwdec_selected,
+                Self::hardware_decoding_choices(),
+                Clone::clone,
+                Message::HardwareDecodingChanged,
+            ),
+            "Hardware video decoding mode. Use \"auto\" for automatic detection or \"no\" to disable.",
+        )]
+        .spacing(16);
+        playback = playback.push(self.selection(
+            "Buffer Size",
+            controls::select(
+                BUFFER_SIZE_CONTROL,
+                jfn_config::cache_size_mb(),
+                BUFFER_SIZE_CHOICES_MB.to_vec(),
+                |value: &i32| buffer_size_label(*value),
+                Message::BufferSizeChanged,
+            ),
+            "How much of the stream to buffer ahead of playback. Larger values ride out network hiccups but use that much RAM. Requires restart.",
+        ));
+        // Windows + NVIDIA RTX only: AI video enhancement via mpv's d3d11vpp
+        // filter. Hidden elsewhere because the filter only exists on the
+        // Windows mpv build.
+        if jfn_platform_abi::try_lease()
+            .is_some_and(|lease| rtx_visible(lease.platform().display()))
+        {
+            playback = playback
+                .push(self.toggle(
+                    RTX_VSR_CONTROL,
+                    "RTX Video Super Resolution",
+                    jfn_config::rtx_vsr(),
+                    Message::RtxVsrChanged,
+                    "NVIDIA RTX AI upscaling and detail enhancement. Requires an RTX 20-series or newer GPU. Forces D3D11 hardware decoding. Requires restart.",
+                ))
+                .push(self.toggle(
+                    RTX_HDR_CONTROL,
+                    "RTX Video HDR",
+                    jfn_config::rtx_hdr(),
+                    Message::RtxHdrChanged,
+                    "NVIDIA RTX AI SDR-to-HDR conversion. Requires an RTX 20-series or newer GPU and an HDR display set to HDR mode. Forces D3D11 hardware decoding. Requires restart.",
+                ));
+        }
+
         let mut controls = column![
             text("Changes take effect after restarting the application.").class(Some(theme::MUTED)),
-            self.group(SECTION_TITLES[0], column![self.selection(
-                "Hardware Decoding",
-                controls::select(
-                    HARDWARE_DECODING_CONTROL,
-                    hwdec_selected,
-                    Self::hardware_decoding_choices(),
-                    Clone::clone,
-                    Message::HardwareDecodingChanged,
-                ),
-                "Hardware video decoding mode. Use \"auto\" for automatic detection or \"no\" to disable.",
-            )]),
+            self.group(SECTION_TITLES[0], playback),
             self.group(SECTION_TITLES[1], column![
                 self.setting(
                     "Audio Passthrough",
@@ -274,6 +316,9 @@ impl Settings {
                     jfn_config::set_hwdec(hwdec);
                 }
             }
+            Message::BufferSizeChanged(value) => jfn_config::set_cache_size_mb(value),
+            Message::RtxVsrChanged(value) => jfn_config::set_rtx_vsr(value),
+            Message::RtxHdrChanged(value) => jfn_config::set_rtx_hdr(value),
             Message::AudioPassthroughEdited(value) => {
                 self.audio_passthrough = value;
                 return Outcome::None;
@@ -415,15 +460,39 @@ fn transparent_titlebar_visible(display: DisplayBackend) -> bool {
     display == DisplayBackend::MacOS
 }
 
+fn rtx_visible(display: DisplayBackend) -> bool {
+    display == DisplayBackend::Windows
+}
+
+/// The forward-buffer sizes offered, in MiB; bounded by
+/// `jfn_config::CACHE_SIZE_MB_MIN..=CACHE_SIZE_MB_MAX`.
+const BUFFER_SIZE_CHOICES_MB: [i32; 8] = [32, 64, 128, 256, 512, 1024, 2048, 4096];
+
+fn buffer_size_label(mb: i32) -> String {
+    let size = if mb >= 1024 && mb % 1024 == 0 {
+        format!("{} GB", mb / 1024)
+    } else {
+        format!("{mb} MB")
+    };
+    if mb == jfn_config::CACHE_SIZE_MB_DEFAULT {
+        format!("{size} (default)")
+    } else {
+        size
+    }
+}
+
 #[cfg(test)]
 fn control_order(display: DisplayBackend, decorations: bool, server: bool) -> Vec<Id> {
-    let mut ids = vec![
-        HARDWARE_DECODING_CONTROL,
+    let mut ids = vec![HARDWARE_DECODING_CONTROL, BUFFER_SIZE_CONTROL];
+    if rtx_visible(display) {
+        ids.extend([RTX_VSR_CONTROL, RTX_HDR_CONTROL]);
+    }
+    ids.extend([
         AUDIO_PASSTHROUGH_FIELD,
         EXCLUSIVE_AUDIO_CONTROL,
         CHANNEL_LAYOUT_CONTROL,
         FORCE_TRANSCODE_CONTROL,
-    ];
+    ]);
     if decorations {
         ids.push(WINDOW_DECORATION_CONTROL);
     }
@@ -535,6 +604,36 @@ mod tests {
     }
 
     #[test]
+    fn rtx_controls_are_windows_only_and_follow_the_buffer_size() {
+        assert!(rtx_visible(DisplayBackend::Windows));
+        assert!(!rtx_visible(DisplayBackend::MacOS));
+        assert!(!rtx_visible(DisplayBackend::Wayland));
+        assert_eq!(
+            control_order(DisplayBackend::Windows, false, false)[..4],
+            [
+                HARDWARE_DECODING_CONTROL,
+                BUFFER_SIZE_CONTROL,
+                RTX_VSR_CONTROL,
+                RTX_HDR_CONTROL,
+            ]
+        );
+    }
+
+    #[test]
+    fn buffer_size_choices_are_within_config_bounds_and_labelled() {
+        assert_eq!(BUFFER_SIZE_CHOICES_MB[0], jfn_config::CACHE_SIZE_MB_MIN);
+        assert_eq!(
+            BUFFER_SIZE_CHOICES_MB[BUFFER_SIZE_CHOICES_MB.len() - 1],
+            jfn_config::CACHE_SIZE_MB_MAX
+        );
+        assert!(BUFFER_SIZE_CHOICES_MB.contains(&jfn_config::CACHE_SIZE_MB_DEFAULT));
+        assert_eq!(buffer_size_label(32), "32 MB");
+        assert_eq!(buffer_size_label(256), "256 MB (default)");
+        assert_eq!(buffer_size_label(1024), "1 GB");
+        assert_eq!(buffer_size_label(4096), "4 GB");
+    }
+
+    #[test]
     fn transparent_titlebar_is_macos_only() {
         assert!(transparent_titlebar_visible(DisplayBackend::MacOS));
         assert!(!transparent_titlebar_visible(DisplayBackend::Wayland));
@@ -573,6 +672,7 @@ mod tests {
             control_order(DisplayBackend::Wayland, true, true),
             [
                 HARDWARE_DECODING_CONTROL,
+                BUFFER_SIZE_CONTROL,
                 AUDIO_PASSTHROUGH_FIELD,
                 EXCLUSIVE_AUDIO_CONTROL,
                 CHANNEL_LAYOUT_CONTROL,
@@ -589,6 +689,7 @@ mod tests {
             control_order(DisplayBackend::MacOS, false, false),
             [
                 HARDWARE_DECODING_CONTROL,
+                BUFFER_SIZE_CONTROL,
                 AUDIO_PASSTHROUGH_FIELD,
                 EXCLUSIVE_AUDIO_CONTROL,
                 CHANNEL_LAYOUT_CONTROL,

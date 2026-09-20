@@ -170,6 +170,9 @@ struct StartupOptions {
     /// The file logs are written to; `None` disables file logging.
     log_file: Option<PathBuf>,
     disable_gpu_compositing: bool,
+    rtx_vsr: bool,
+    rtx_hdr: bool,
+    cache_size_mb: i32,
     remote_debugging_port: jfn_cef::DebuggingPort,
 }
 
@@ -179,6 +182,9 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
     let saved_chans = jfn_config::audio_channels();
     let saved_log_level = jfn_config::log_level();
     let saved_audio_exclusive = jfn_config::audio_exclusive();
+    let rtx_vsr = jfn_config::rtx_vsr();
+    let rtx_hdr = jfn_config::rtx_hdr();
+    let cache_size_mb = jfn_config::cache_size_mb();
 
     // An unknown CLI value falls back to the mpv default.
     let hwdec = match cli.hwdec.as_deref() {
@@ -226,6 +232,9 @@ fn resolve_startup_options(cli: &cli::Cli) -> StartupOptions {
         log_level,
         log_file,
         disable_gpu_compositing,
+        rtx_vsr,
+        rtx_hdr,
+        cache_size_mb,
         remote_debugging_port,
     }
 }
@@ -241,6 +250,9 @@ struct MpvInitOptions<'a> {
     audio_exclusive: bool,
     audio_channels: &'a str,
     mpv_log_level: &'a str,
+    rtx_vsr: bool,
+    rtx_hdr: bool,
+    cache_size_mb: i32,
 }
 
 fn init_mpv_handle(opts: MpvInitOptions<'_>) -> *mut jfn_mpv::sys::mpv_handle {
@@ -271,6 +283,9 @@ fn init_mpv_handle(opts: MpvInitOptions<'_>) -> *mut jfn_mpv::sys::mpv_handle {
         window_maximized_at_boot: opts.boot_window_max,
         mpv_log_level: mpv_log_level_c.as_ptr(),
         client_side_decorations: jfn_config::client_side_decorations(),
+        rtx_vsr: opts.rtx_vsr,
+        rtx_hdr: opts.rtx_hdr,
+        cache_size_mb: opts.cache_size_mb,
     };
     unsafe { jfn_mpv::boot::jfn_mpv_handle_init(&boot as *const _) }
 }
@@ -895,6 +910,9 @@ pub fn jfn_app_main() -> c_int {
         jfn_paths::set_cache_dir_override(path.into());
     }
 
+    // One-time: inherit settings from an existing upstream jellium-desktop
+    // install (this build keeps a separate data dir), before init/load.
+    jfn_paths::migrate_legacy_config();
     let settings_path = jfn_paths::config_dir().join("settings.json");
     jfn_config::settings_init(&settings_path);
     jfn_config::settings_load();
@@ -999,7 +1017,14 @@ fn run_app(
     // window ID can be handed to mpv as `wid`.
     plat().mpv_host().ensure_host_window();
 
-    let mpv_log_level = mpv_log_level_from_filter();
+    let mut mpv_log_level = mpv_log_level_from_filter();
+    // RTX VSR confirms success only at mpv's verbose level. Raise the log
+    // subscription (not the file filter) so the Playback Info indicator can show
+    // "Active" without the user manually enabling verbose logging. The file log
+    // is filtered separately, so it stays at the user's chosen level.
+    if (opts.rtx_vsr || opts.rtx_hdr) && matches!(mpv_log_level, "no" | "error" | "warn" | "info") {
+        mpv_log_level = "v";
+    }
 
     // mpv's --geometry takes physical pixels (see m_geometry_apply in
     // third_party/mpv/options/m_option.c). Window boot options only apply
@@ -1018,6 +1043,9 @@ fn run_app(
         audio_exclusive: opts.audio_exclusive,
         audio_channels: &opts.audio_channels,
         mpv_log_level,
+        rtx_vsr: opts.rtx_vsr,
+        rtx_hdr: opts.rtx_hdr,
+        cache_size_mb: opts.cache_size_mb,
     });
     let Some(mpv) = MpvRuntime::new(raw) else {
         tracing::error!(target: "Main", "mpv handle init failed");
@@ -1234,6 +1262,17 @@ extern "C" fn h_idle_inhibit(level: u32) {
 extern "C" fn h_theme_video_mode(active: bool) {
     jfn_color::theme::jfn_theme_color_set_video_mode(active);
 }
+/// Manual "Check for updates" from the About tab. The check itself lives in
+/// jellyfin-web's shim (`__rtxCheckForUpdates` in native-shim.js), which polls
+/// GitHub releases and shows the dialog; there is nothing to do when the web
+/// overlay is not up yet.
+pub(crate) fn web_check_for_updates() {
+    let Some(overlay) = WEB_OVERLAY.lock().clone() else {
+        return;
+    };
+    overlay.exec_js("window.__rtxCheckForUpdates && window.__rtxCheckForUpdates(true);");
+}
+
 extern "C" fn h_web_exec_js(js: *const c_char) {
     if js.is_null() {
         return;

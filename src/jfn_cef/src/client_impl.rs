@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::client::Inner;
 
-mod context_menu;
+pub(crate) mod context_menu;
 mod display;
 mod keyboard;
 mod lifespan;

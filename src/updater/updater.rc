@@ -1,0 +1,5 @@
+/* Embed the application manifest as the process-default manifest.
+ * Resource type 24 = RT_MANIFEST; id 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID
+ * (the manifest Windows reads when launching this .exe). Numeric forms are
+ * used so no extra headers need to be includable by rc.exe / windres. */
+1 24 "updater.manifest"

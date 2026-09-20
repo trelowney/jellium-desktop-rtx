@@ -18,6 +18,174 @@
         return mediaStreams.find(s => s.Index === index) || null;
     }
 
+    // ---- Playback Info: forward-buffer formatting -----------------------
+    // Fed by window._nativeBufferStats (mpv's demuxer-cache-state, ~1 Hz).
+    const BUFFER_STATS_STALE_MS = 5000;
+    const NOT_AVAILABLE = '—';  // em dash
+
+    function formatBufferBytes(bytes) {
+        const mb = bytes / (1024 * 1024);
+        return mb >= 1000 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+    }
+
+    function formatBufferRate(bytesPerSec) {
+        const mb = bytesPerSec / (1024 * 1024);
+        return mb >= 1 ? `${mb.toFixed(1)} MB/s` : `${Math.round(bytesPerSec / 1024)} kB/s`;
+    }
+
+    function formatBufferClock(seconds) {
+        const total = Math.round(seconds);
+        const s = String(total % 60).padStart(2, '0');
+        const m = Math.floor(total / 60) % 60;
+        const h = Math.floor(total / 3600);
+        return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+    }
+
+    // What the driver will and will not tell us about RTX, and why these rows
+    // are worded the way they are:
+    //
+    // The NVIDIA driver exposes no way to read back whether Super Resolution is
+    // engaged. That was measured against the driver directly, not assumed: the
+    // extension answers a query, but the answer is identical whether Super
+    // Resolution is on or off in the NVIDIA Control Panel, and identical whether
+    // the conversion upscales or not. So a live "is it applying right now" for
+    // VSR is not obtainable, and claiming one would be dishonest.
+    //
+    // What IS observable is what the filter chain did to the frames, via mpv's
+    // video-params (decoded), video-out-params (after d3d11vpp) and
+    // video-target-params (sent to the display). RTX Video HDR is genuinely
+    // verifiable this way: the conversion has to move the output to PQ/BT.2020,
+    // so if it did not, it did not happen. Scaling is verifiable too, though it
+    // only proves d3d11vpp scaled — not that NVIDIA's AI path did it rather than
+    // the filter's fallback scaler. The wording keeps that distinction.
+    function pipelineStages() {
+        const p = window.__videoPipeline;
+        if (!p) return null;
+        const known = (s) => s && s.w > 0 && s.h > 0;
+        return known(p.source) ? p : null;
+    }
+
+    function sizeOf(stage) {
+        return stage && stage.w > 0 && stage.h > 0 ? `${stage.w}×${stage.h}` : null;
+    }
+
+    // mpv reports PQ as "pq"; BT.2020 primaries as "bt.2020". Either alone is
+    // not HDR, but the RTX conversion sets both.
+    function isHdr(stage) {
+        return !!stage && stage.gamma === 'pq';
+    }
+
+    function rtxVsrStatus(enabled, runtime) {
+        if (!enabled) return 'Off';
+        if (runtime === 'failed') return 'Failed (GPU rejected)';
+        if (runtime === 'unsupported') return 'Unsupported (no NVIDIA GPU)';
+
+        const p = pipelineStages();
+        if (!p) return runtime === 'active' ? 'Enabled (driver accepted)' : 'Enabled';
+
+        const src = p.source;
+        const out = p.filtered;
+        if (!(out && out.w > 0)) return 'Enabled (driver accepted)';
+        if (out.w <= src.w) {
+            // Not a fault: the scaling stage is dropped when the output is no
+            // larger than the source, since anything upscaled would be resized
+            // straight back down again.
+            return 'Enabled — not upscaling (output is not larger than the source)';
+        }
+        const factor = (out.w / src.w).toFixed(2).replace(/\.?0+$/, '');
+        let value = `Scaling ${sizeOf(src)} → ${sizeOf(out)} (${factor}×)`;
+        // The filter scales by a fixed factor, so on a display smaller than its
+        // output the video output resamples once more. That is expected, not a
+        // fault, so it is stated plainly rather than flagged.
+        const target = p.target;
+        if (target && target.w > 0 && target.w !== out.w) {
+            value += `, display ${sizeOf(target)}`;
+        }
+        return value;
+    }
+
+    function rtxHdrStatus(enabled, runtime) {
+        if (!enabled) return 'Off';
+        if (runtime === 'failed') return 'Failed (GPU rejected)';
+        if (runtime === 'unsupported') return 'Unsupported (driver reported no support)';
+
+        const p = pipelineStages();
+        if (!p) return 'Enabled';
+
+        // A source that is already HDR has nothing to convert.
+        if (isHdr(p.source)) return 'Not needed (source is already HDR)';
+
+        // The conversion is only real if it shows up on the filter output.
+        if (isHdr(p.filtered)) {
+            const target = p.target;
+            const onDisplay = isHdr(target) ? '' : ', but the display is not in HDR';
+            return `Active — output converted to PQ / ${p.filtered.primaries || 'BT.2020'}${onDisplay}`;
+        }
+        if (p.filtered && p.filtered.gamma) {
+            return `Enabled, but output is still ${p.filtered.gamma} (not converting)`;
+        }
+        return 'Enabled';
+    }
+
+    // Since the driver will not report whether Super Resolution is engaged, its
+    // cost is the closest available evidence: a GPU near idle during an upscale
+    // is not upscaling. Stale samples are dropped rather than shown as current.
+    function describeGpuLoad() {
+        const l = window.__gpuLoad;
+        if (!l || typeof l.gpu !== 'number') return null;
+        if (Date.now() - l.at > 5000) return null;
+        return `${l.gpu}% (memory ${l.memory}%)`;
+    }
+
+    // The raw evidence behind the two rows above.
+    function describePipeline() {
+        const p = pipelineStages();
+        if (!p) return null;
+        const stage = (s) => {
+            const size = sizeOf(s);
+            if (!size) return null;
+            return s.gamma ? `${size} ${s.gamma}` : size;
+        };
+        const parts = [stage(p.source), stage(p.filtered), stage(p.target)].filter(Boolean);
+        return parts.length > 1 ? parts.join(' → ') : null;
+    }
+
+    // Reads as a sentence in four rows: how much is buffered, how much playback
+    // time that covers, how fast it is filling, and what the demuxer is doing.
+    function getBufferStatsCategory() {
+        const b = window.__bufferStats;
+        if (!b || typeof b.fwBytes !== 'number') return null;
+        const stale = Date.now() - b.at > BUFFER_STATS_STALE_MS;
+
+        let buffered = formatBufferBytes(b.fwBytes);
+        if (b.maxBytes > 0) {
+            const percent = Math.min(100, Math.round((b.fwBytes / b.maxBytes) * 100));
+            buffered += ` of ${formatBufferBytes(b.maxBytes)} (${percent}%)`;
+        }
+
+        // The rate is only meaningful while mpv is still reading — a paused or
+        // fully-buffered stream stops updating, so show a dash instead of the
+        // last number it happened to report.
+        const rate = stale || typeof b.rateBps !== 'number' ? NOT_AVAILABLE : formatBufferRate(b.rateBps);
+        const ahead = typeof b.seconds === 'number' ? formatBufferClock(b.seconds) : NOT_AVAILABLE;
+
+        let status;
+        if (b.underrun) status = 'Underrun (waiting for data)';
+        else if (b.eofCached) status = 'End of stream buffered';
+        else if (stale || b.idle) status = b.maxBytes > 0 && b.fwBytes >= b.maxBytes * 0.95 ? 'Full' : 'Idle';
+        else status = 'Filling';
+
+        return {
+            name: 'Playback Buffer',
+            stats: [
+                { label: 'Buffered ahead', value: buffered },
+                { label: 'Playback time buffered', value: ahead },
+                { label: 'Fill rate', value: rate },
+                { label: 'Status', value: status }
+            ]
+        };
+    }
+
     class mpvVideoPlayer extends window.MpvPlayerBase {
         constructor(args) {
             super(args);
@@ -312,7 +480,7 @@
         }
         canPlayItem(item) { return this.canPlayMediaType(item.MediaType); }
         supportsPlayMethod() { return true; }
-        static getSupportedFeatures() { return ['PlaybackRate', 'SetAspectRatio']; }
+        static getSupportedFeatures() { return ['PlaybackRate', 'SetAspectRatio', 'SubtitleOffset']; }
         supports(feature) { return mpvVideoPlayer.getSupportedFeatures().includes(feature); }
         isFullscreen() { return window._isFullscreen === true; }
         toggleFullscreen() {
@@ -334,7 +502,34 @@
 
         togglePictureInPicture() {}
         toggleAirPlay() {}
-        getStats() { return Promise.resolve({ categories: [] }); }
+        getStats() {
+            const categories = [];
+            // Windows + RTX: surface VSR/HDR in the Playback Info panel, each on
+            // its own row. Prefer mpv's real runtime outcome (pushed via
+            // _nativeRtxStatus); fall back to the configured setting when mpv
+            // hasn't reported yet. mpv only logs success at verbose, so without
+            // verbose logging an enabled feature shows as "On"; a GPU rejection
+            // is logged at warn and always surfaces as "Failed"/"Unsupported".
+            if (navigator.platform.startsWith('Win')) {
+                const pb = (window.jmpInfo && window.jmpInfo.settings && window.jmpInfo.settings.playback) || {};
+                const rt = window.__rtxStatus || {};
+                const stats = [
+                    { label: 'RTX Video Super Resolution', value: rtxVsrStatus(!!pb.rtxVsr, rt.vsr) },
+                    { label: 'RTX Video HDR', value: rtxHdrStatus(!!pb.rtxHdr, rt.hdr) }
+                ];
+                // The evidence the two rows above are read from, shown as-is so a
+                // surprising verdict can be checked rather than taken on trust.
+                const pipeline = describePipeline();
+                if (pipeline) stats.push({ label: 'Pipeline', value: pipeline });
+                const gpu = describeGpuLoad();
+                if (gpu) stats.push({ label: 'GPU load', value: gpu });
+                categories.push({ name: 'RTX Video Enhancement', stats });
+            }
+            // Directly under the RTX rows, ahead of jellyfin-web's own media info.
+            const buffer = getBufferStatsCategory();
+            if (buffer) categories.push(buffer);
+            return Promise.resolve({ categories });
+        }
         getSupportedAspectRatios() {
             return [
                 { id: 'auto',  name: this.globalize.translate('Auto') },

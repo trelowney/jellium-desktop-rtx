@@ -162,6 +162,10 @@ impl Stack {
                         connection.edit_url(String::new());
                         self.views.pop();
                     }
+                    OverlayOutcome::CheckForUpdates => {
+                        self.views.pop();
+                        crate::app::web_check_for_updates();
+                    }
                 }
             }
             _ => {}

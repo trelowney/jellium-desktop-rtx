@@ -66,6 +66,30 @@ impl Inner {
         }
     }
 
+    /// Drop Chromium's HTTP cache, then reload bypassing what is left.
+    ///
+    /// `Network.clearBrowserCache` is the only cache-clearing entry point CEF
+    /// exposes, and `SendDevToolsMessage` does not need the DevTools window to
+    /// be open. It touches the network cache only — cookies and Local Storage,
+    /// and with them the Jellyfin login, survive. If the DevTools agent refuses
+    /// the message this degrades to a plain hard reload, which is still enough
+    /// to pick up a changed `index.html`.
+    pub(crate) fn clear_http_cache_and_reload(&self) {
+        let Some(browser) = self.browser_clone() else {
+            return;
+        };
+        if let Some(host) = browser.host() {
+            let sent = host
+                .send_dev_tools_message(Some(br#"{"id":1,"method":"Network.clearBrowserCache"}"#));
+            jfn_logging::log(
+                jfn_logging::Category::Cef,
+                jfn_logging::Level::Info,
+                &format!("clear cache requested (accepted={})", sent != 0),
+            );
+        }
+        browser.reload_ignore_cache();
+    }
+
     pub(crate) fn exec_js(&self, js: &str) {
         let Some(b) = self.browser_clone() else {
             return;

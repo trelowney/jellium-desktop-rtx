@@ -351,6 +351,12 @@ impl Inner {
         self.name.lock().clone()
     }
 
+    /// True for the browser hosting jellyfin-web. Menu entries that only make
+    /// sense against the server (reload, cache) gate on this.
+    pub(crate) fn is_web(&self) -> bool {
+        *self.name.lock() == "web"
+    }
+
     pub(crate) fn owner_disconnection(&self) -> Receiver<Infallible> {
         self.owner_disconnected.clone()
     }

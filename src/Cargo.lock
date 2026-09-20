@@ -2636,6 +2636,8 @@ dependencies = [
  "serde_json",
  "slotmap",
  "thiserror 2.0.20",
+ "tracing",
+ "windows",
 ]
 
 [[package]]
@@ -2832,6 +2834,7 @@ dependencies = [
  "pkg-config",
  "thiserror 2.0.20",
  "tracing",
+ "windows",
 ]
 
 [[package]]
@@ -2871,6 +2874,7 @@ dependencies = [
  "jfn-wake-event",
  "parking_lot",
  "serde",
+ "tracing",
 ]
 
 [[package]]
@@ -2913,6 +2917,15 @@ dependencies = [
  "tokio",
  "tracing",
  "wgpu",
+]
+
+[[package]]
+name = "jfn-updater"
+version = "0.1.0-dev"
+dependencies = [
+ "embed-resource",
+ "windows",
+ "zip",
 ]
 
 [[package]]

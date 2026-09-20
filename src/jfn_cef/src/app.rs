@@ -609,7 +609,8 @@ fn run_user_scripts(profile: &ExtraInfo, frame: &Frame) {
     }
     replace_first(&mut code, "__SERVER_URL__", &jfn_config::server_url());
     replace_first(&mut code, "__SETTINGS_JSON__", &jfn_config::cli_json());
-    replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION);
+    replace_first(&mut code, "__APP_VERSION__", crate::APP_VERSION_FULL);
+    replace_first(&mut code, "__APP_RELEASE_TAG__", crate::APP_RELEASE_TAG);
     let decoration_options = profile
         .window_decoration_options()
         .iter()

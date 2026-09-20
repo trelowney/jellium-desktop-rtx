@@ -9,6 +9,11 @@ use crate::platform_ops::{MENU_DISMISSED, MenuDelivery, MenuItem, MenuKind, Menu
 
 const STRIP_ACCEL_KEEP: u8 = b'&';
 
+/// Added next to the built-in Reload entries; sits above the application
+/// menu's own range (26_500+) so the two never collide. Dispatched by the
+/// browser itself, not by the application menu's `on_selected`.
+pub(crate) const MENU_ID_CLEAR_CACHE: c_int = sys::cef_menu_id_t::MENU_ID_USER_FIRST as c_int + 200;
+
 fn strip_accelerator(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -41,6 +46,22 @@ wrap_context_menu_handler! {
             let reload_id: c_int = MenuId::RELOAD.get_raw() as c_int;
             if m.index_of(reload_id) < 0 {
                 m.add_item(reload_id, Some(&CefString::from("Reload")));
+            }
+            // Reload alone can keep serving a stale index.html: it revalidates,
+            // the server answers 304 and Chromium keeps the cached document,
+            // so a newly injected plugin script is never seen. Offer the two
+            // escapes next to it, on the server-backed browser only.
+            if self.inner.is_web() {
+                let hard_reload_id: c_int = MenuId::RELOAD_NOCACHE.get_raw() as c_int;
+                if m.index_of(hard_reload_id) < 0 {
+                    m.add_item(hard_reload_id, Some(&CefString::from("Hard Reload")));
+                }
+                if m.index_of(MENU_ID_CLEAR_CACHE) < 0 {
+                    m.add_item(
+                        MENU_ID_CLEAR_CACHE,
+                        Some(&CefString::from("Clear Cache and Reload")),
+                    );
+                }
             }
             loop {
                 let n = m.count();

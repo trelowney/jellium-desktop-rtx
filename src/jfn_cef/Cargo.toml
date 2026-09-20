@@ -28,10 +28,14 @@ serde.workspace = true
 serde_json.workspace = true
 slotmap.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 # Dup'ing CEF's dmabuf plane fds at the accelerated-paint boundary.
 [target.'cfg(target_os = "linux")'.dependencies]
 nix.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_System_Threading"] }
 
 [build-dependencies]
 gix = { workspace = true }

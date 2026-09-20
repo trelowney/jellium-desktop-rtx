@@ -1,0 +1,154 @@
+# Changelog
+
+All notable changes to this RTX fork. Newest first. Each release's notes are
+published from the matching section below.
+
+## 2026-09-20
+
+### Changed
+- **Re-synced onto upstream jellium-desktop `14dc084`** (2026-09-19), which brings the upstream's rewrite of the native UI: the client settings, the About panel and the connect screen are now drawn natively (Iced + wgpu) instead of as HTML pages inside the browser, so Settings opens before a server is connected and no longer depends on jellyfin-web. Also from upstream: a reworked CEF lifecycle/navigation, hardware decoding stored as a typed setting, event-driven startup and Linux backend refactors, and dependency bumps (`dirs` 7, `interprocess` 2.4.4, `windows-future` 0.100).
+- **Every fork feature was carried across the rewrite.** *Buffer Size* and the two *RTX* toggles now live in the native Settings → Playback group (the RTX toggles are shown on Windows only, as before); *Check for updates* is a button on the About tab; the right-click menu keeps *Hard Reload* and *Clear Cache and Reload*; the in-page `<select>` dropdowns, the subtitle-offset fix, the truthful RTX rows and live buffer stats in Playback Info, the GPU-load readout, the NVIDIA guard, the separate data directory and the self-updater are unchanged.
+- The context menu's *About* entry is now *Settings* (upstream change); About is a tab inside it.
+
+## 2026-09-10
+
+### Added
+- **Hard Reload and Clear Cache and Reload in the right-click menu.** Plain *Reload* is not always enough to pick up a changed `index.html`: it revalidates, the server answers `304 Not Modified`, and Chromium keeps serving the document it already had. A server-side plugin that starts injecting a `<script>` into the page — a rating overlay, a custom theme — is then invisible in the app while a browser on the same machine shows it, and no amount of reloading changes that. **Hard Reload** refetches the document and every subresource, ignoring the cache. **Clear Cache and Reload** additionally drops the whole HTTP cache before reloading; it clears the network cache only, so cookies and Local Storage — and with them the server login — are left alone. Both entries sit next to *Reload*, and only on the browser showing the server, not on the connect screen or the About window.
+
+## 2026-08-15.1
+
+### Fixed
+- **Windows dropdowns look like the app again.** The previous build fixed them by handing them to the Win32 menu host, which works but draws a grey system menu that belongs to a different decade and matches nothing around it. They now render in the page through `select-menu.js`, the same path X11 uses — dark, rounded, with the current option in bold. Context menus keep the native Win32 host.
+
+## 2026-08-15
+
+### Fixed
+- **Dropdowns open again on Windows.** No `<select>` anywhere in the app would open its menu — not in Settings, not on any page. CEF renders off-screen, so a select's popup is not drawn into the page; it is handed to the app to place and paint. Windows was the only platform doing that through its own composited surface, and that surface never produced a visible menu, with GPU compositing both on and off. Dropdowns now go through the same Win32 menu host that already served context menus, which is what macOS and Wayland have always used. Verified end to end before release: popup shown → size received → options returned over IPC → menu drawn with the right items and the current one selected.
+
+### Added
+- **The popup path logs what it is doing.** It previously had no logging at all, so diagnosing the bug above meant reading source rather than a log. The four decisive points — popup shown, popup size, the option list coming back from the renderer, and which delivery opened the menu (or which of its three preconditions is still missing) — now report under the `menu` target. Run with `--log-level "info,menu=debug"`; on Windows the log is `%LOCALAPPDATA%\jellium-desktop-rtx\Logs\jellium-desktop.log`.
+
+## 2026-08-14
+
+### Added
+- **Playback Info reports what RTX actually did, not what was asked for.** The two RTX rows used to say *Active* as soon as mpv had asked the driver to switch the feature on — mpv only checks that the call didn't fail, so *Active* was a restatement of your own setting rather than an observation. Both rows now describe the pipeline mpv really produced. **RTX Video HDR** is genuinely verifiable, because the conversion has to show up as PQ / BT.2020 on the filter output: it reports *Active — output converted to PQ*, or *Enabled, but output is still bt709 (not converting)* when it didn't happen, or *Not needed (source is already HDR)*. **RTX Super Resolution** reports the scaling it can prove — *Scaling 1920×1080 → 3840×2160 (2×), display 2560×1440*. It deliberately stops short of claiming NVIDIA's AI path is doing the work: the driver exposes no way to ask (unlike HDR, the Super Resolution extension is write-only — it can be switched on, never queried), so claiming otherwise would be the same placebo in new wording.
+- **A Pipeline row and a GPU load row.** *Pipeline* shows the raw evidence behind the rows above — decoded frame → filter output → what reaches the display, with each stage's transfer function. *GPU load* is sampled from NVML once a second, and is the closest available corroboration for Super Resolution: a GPU sitting near idle during an upscale is not upscaling.
+
+### Changed
+- **Super Resolution stops upscaling when there is nothing to gain.** The filter enlarged every frame 2× regardless of where it was going, so a 1080p file on a 1080p screen, or a 4K file on a 1440p one, paid the full GPU cost for a picture the video output then resized straight back. The scaling stage is now switched on only when the output is actually larger than the decoded frame, decided per file once both sizes are known, and re-evaluated when they change. The comparison is against the real output size rather than the monitor's native resolution, so a small window on a big display doesn't upscale either. Both filter chains keep the `x2bgr10` format and the HDR conversion, so switching between them can never lose either.
+- **Re-synced onto upstream jellium-desktop `28f2cf1`** (was `f3ba9cd`), which moves **CEF from 150 to 151**. Upstream rebuilt the Windows compositor on DirectComposition and then moved it, and macOS, onto wgpu; made the GPU paint layer cross-platform; moved the Windows and macOS code onto `windows-sys` and `objc2` bindings; swept sync primitives onto `parking_lot`/`crossbeam`; typed the config and JS payloads with serde; reworked video-output boot readiness; unified menu handling; and fixed a crash on single-page navigation. Every RTX fork feature was carried across and verified individually.
+
+## 2026-08-03
+
+### Added
+- **Playback Info shows the buffer live.** A **Playback Buffer** section sits under the RTX rows with four figures, read straight from mpv's demuxer once a second: **Buffered ahead** (e.g. `184 MB of 256 MB (72%)` against the Buffer Size you picked), **Playback time buffered** (what those megabytes work out to in minutes — it varies with bitrate, which is the point of a byte-bound buffer), **Fill rate** (how fast data is currently arriving), and **Status** (*Filling*, *Full*, *Idle*, *Underrun*, or *End of stream buffered*). The fill rate shows a dash rather than a stale number once mpv stops reading, e.g. while paused.
+
+## 2026-08-01.1
+
+### Fixed
+- **The updater window is in English.** The self-updater side-car had its window title, progress phases ("Downloading…", "Installing the update…", "Done — starting the app…") and every error message hardcoded in Czech, which nobody outside one machine could read. All of it is English now, matching the rest of the app. (The side-car that performs *this* update is the one already installed, so the Czech text shows one last time; from this build on it's English.)
+
+## 2026-08-01
+
+### Added
+- **Buffer Size is back** (Settings → Playback). Jellyfin Media Player let you pick how much of the stream to buffer ahead; jellium-desktop dropped the setting, leaving mpv's built-in default. It's selectable again from **32 MB to 4 GB**, default **256 MB**. Takes effect on restart. The buffer is **strictly byte-bound** — it reads ahead until the chosen number of megabytes is buffered (in RAM), no matter how many seconds of playback that is. mpv limits readahead by time as well as by bytes and stops at whichever comes first, so both time limits are pushed out of the way: `cache-secs` (10s by default, governs seekable streams) and `demuxer-readahead-secs` (1s by default, governs live/non-seekable ones); the cache is also forced on for every stream, not just network ones. Only the forward buffer is changed — mpv's backward buffer keeps its default so a large setting can't quietly double memory use.
+
+### Changed
+- **Re-synced onto upstream jellium-desktop `f3ba9cd`** (was `1272c89`). CEF stays at `150.0.0`. Upstream's work here is almost entirely Wayland/Linux (compositor layer rework, scale/extent state machine, `<select>` popups, client-side key repeat) plus an internal refactor that moves window sizing out of the boot path — none of it touches the Windows RTX path. The in-app CEF version shown in Playback Info and `--version` is now read from the libcef actually loaded at runtime instead of the version compiled against.
+
+## 2026-07-18
+
+### Changed
+- **Renamed to Jellium Desktop RTX.** Upstream renamed the project from *Jellyfin Desktop* to *Jellium Desktop*; this fork follows suit as **Jellium Desktop RTX** (window title, app icon metadata, executable `jellium-desktop.exe`). All RTX features are unchanged.
+- **Re-synced onto upstream jellium-desktop `1272c89`** (was jellyfin-desktop `225af09b`). Picks up **CEF `149.3.0` → `150.0.0`** (newer Chromium under the web UI), a large Wayland/mpv-proxy rework (Linux only — the Windows RTX path is unaffected), and assorted dependency bumps (uuid, clap, zbus, pollster, x11rb). No upstream change touches the RTX video path.
+- **Data directory follows the new name** — settings/cache/logs now live under `jellium-desktop-rtx`. On first run the app **imports your existing settings and login** from the previous `jellyfin-desktop-rtx` directory (or a stock `jellium-desktop`/`jellyfin-desktop` install), so you don't have to reconfigure or sign in again.
+
+### Fixed
+- **Self-update keeps working across the rename.** The in-app updater now points at the renamed repository and verifies/installs the renamed `jellium-desktop.exe`, so future updates continue to download-and-swap in place. (Because the executable name changed, this one build must be installed manually once; updates from it onward are automatic again.)
+
+## 2026-07-07
+
+### Fixed
+- **Self-update works.** Clicking **Update now** now downloads the new release in a progress window, swaps the app in place and relaunches it — the flow that had silently failed with "download it manually" for weeks. The real cause was the updater side-car's embedded manifest: it was **malformed XML** (an explanatory comment contained `--`, which the XML spec forbids inside comments), so Windows refused to start the side-car with `ERROR_SXS_CANT_GEN_ACTCTX` (os error 14001) and the update silently aborted. The manifest is now valid, and the build validates it and fails if any comment contains `--`, so it can't regress. The hand-off is hardened too: the app force-quits with `TerminateProcess` (a kernel-level exit that can't deadlock against CEF/NVIDIA teardown, unlike the previous `ExitProcess`), armed before the graceful save, and the side-car force-closes the app itself if it hasn't exited shortly after hand-off — so applying an update never depends on a clean shutdown.
+- **About shows the release date.** The version string is derived from the release tag, so its date always matches the version (it previously showed the wall-clock build date, which could differ).
+
+### Changed
+- **Re-synced onto upstream jellyfin-desktop `225af09b`.** Picks up upstream's dependency bumps — **CEF `149.2.0` → `149.3.0`** (newer Chromium under the web UI), plus `wgpu`/`wgpu-hal` `29.0.4`, `time` `0.3.53`, and `embed-resource` `3.0.11`. No upstream source or feature changes; all RTX features and the subtitle-offset fix are unchanged.
+
+## 2026-06-26.1
+
+### Fixed
+- **Subtitle offset now actually shifts by the time you set** — enabling the offset control in v2026.06.26 exposed a latent native bug: whole-second delays did nothing. The JS→native bridge marshals an integral JS number (e.g. `2000 ms / 1000 = 2`) as `VTYPE_INT`, but the subtitle/audio-delay handlers read it with `ListValue::double`, which returns `0.0` for a non-double slot — so a 2.0s offset reached mpv as `sub-delay=0`, while a fractional 4.9s came through fine. (That's why nudging often "did nothing" and only odd values moved.) Added a `list_double` reader (the missing mirror of the existing `list_int`) that widens an int slot to f64, and used it for both `playerSetSubtitleDelay` and `playerSetAudioDelay`. Upstream jellyfin-desktop bug, surfaced because upstream never enabled the offset control.
+- **Self-update actually applies now** — the real root cause behind the repeated "downloading… → unable, download manually" failures: **the app never quit after handing off to the updater.** Clicking *Update now* asked for a graceful shutdown, but that path deadlocks when triggered from the in-app update call, so the app kept running — which meant (a) the web UI's 12-second safety net fired the "download it manually" toast, and (b) the side-car, waiting for the app to exit, eventually extracted over files the still-running app (and its CEF/mpv child processes) held locked, and failed. Two fixes: the app now **force-exits shortly after launching the side-car** (best-effort graceful save first, then a hard `ExitProcess` so the deadlock can't keep it alive), and the side-car no longer depends on perfect unlock timing — if a target file is still a loaded image it **renames the old file aside and writes the new one in its place** (the `MoveFile`-a-running-image technique Squirrel/Velopack use), sweeping the `.old-*` leftovers on the next run.
+
+### Changed
+- **Re-synced onto upstream jellyfin-desktop `3.0.0-dev@865e186`** (was `@676919e`). Picks up upstream's recent work: **CEF bumped to 149.2.0** (newer Chromium under the web UI), the built-in right-click context-menu commands (back / reload / cut / copy / paste) are now handled directly by CEF instead of a hand-maintained table, and context-menu delivery was hardened so a menu item can no longer silently do nothing. macOS-only and dependency-only upstream changes ride along but don't affect the Windows build. All RTX features, the self-updater, the separate data dir, and the subtitle-offset fix below are preserved unchanged on top of the new base.
+
+## 2026-06-26
+
+### Fixed
+- **Subtitle sync / offset now works from the player** — a fix for a stock **jellyfin-desktop** bug, not something the RTX fork introduced (it's broken the same way in the unmodified upstream client). Nudging the subtitle delay control did nothing: no matter how far forward or back you shifted, the subtitles stayed exactly as wrong (it worked in the web client, but not in either desktop build). The mpv video player already implemented the full subtitle-offset chain (`setSubtitleOffset` → `setSubtitleDelay` → native `playerSetSubtitleDelay` → mpv `sub-delay`, units and sign correct), but never advertised the `SubtitleOffset` capability, so jellyfin-web assumed the player couldn't offset subtitles and never called any of it. The player now reports `SubtitleOffset` among its supported features, so the in-player control drives mpv's `sub-delay` as intended.
+
+## 2026-06-24.1
+
+### Fixed
+- **Self-update now actually launches.** Clicking **Update now** did nothing — the app stayed open and never downloaded or restarted. The bundled `jellyfin-desktop-rtx-updater.exe` side-car shipped without an application manifest, so Windows' UAC "Installer Detection" heuristic flagged it (its name ends in *updater*) as an installer needing admin rights; launching it from the un-elevated app then failed with `ERROR_ELEVATION_REQUIRED` (os error 740) and the update silently aborted. The updater now embeds an `asInvoker` manifest (the same thing Velopack/Squirrel ship with their `Update.exe`), so it launches in the app's normal context and the update proceeds. Also: if the hand-off ever fails again, the **Update now** button no longer hangs forever — it recovers after a few seconds and points you to the Releases page.
+
+## 2026-06-24
+
+### Fixed
+- **Green screen on HDR sources when RTX HDR is off.** With RTX VSR enabled and RTX HDR disabled (the right setup on an SDR display), playing a 10-bit HDR source — e.g. a 4K HDR10 episode — showed a solid green image. The `d3d11vpp` filter was only given a defined 10-bit output format (`x2bgr10`) when the HDR conversion was on, so a VSR-only chain emitted the HDR frame in a format the renderer misread. The filter now always outputs `x2bgr10`, so HDR content is tone-mapped down to SDR correctly (as the stock client does) without turning on RTX HDR — which on an SDR display over-saturates non-HDR content. RTX HDR's true-HDR conversion is unchanged and still gated on its own toggle.
+
+## 2026-06-21.4
+
+### Changed
+- **New self-updater that actually works and shows progress.** The old in-app updater handed off to a hidden background script that could be killed before it did anything (the app would just close and nothing happened). Replaced with a dedicated `jellyfin-desktop-rtx-updater.exe` side-car bundled next to the app: clicking **Update now** opens a small native window with a progress bar that waits for the app to close, downloads the release (live MB progress), verifies the archive, installs it over the app, and relaunches it. If anything fails, the existing install is left intact and the app is relaunched, with the window showing what went wrong. Pulls only from this fork's GitHub releases.
+
+## 2026-06-21.3
+
+### Added
+- **NVIDIA-GPU guard for RTX**: the app now checks at startup (via DXGI adapter enumeration) whether an NVIDIA GPU is actually present. If RTX VSR/HDR is enabled but no NVIDIA GPU is found — e.g. on a laptop whose NVIDIA dGPU is switched off, leaving only an AMD/Intel integrated GPU — it skips the RTX video path entirely instead of forcing the D3D11/HDR pipeline onto a GPU that can't do it, so playback keeps working unmodified. The check **fails open**: on any real NVIDIA system (or if the GPU can't be queried) RTX always engages, so this never weakens the working case. Playback Info correctly reports **Unsupported** when RTX is skipped this way.
+- **RTX always renders on the NVIDIA GPU (Optimus laptops)**: when an NVIDIA GPU is present, the app now pins mpv's D3D11 device to it (`--d3d11-adapter`, set to the detected adapter — no hardcoding). On a hybrid laptop whose desktop is composited by the integrated GPU, this makes the RTX path actually engage on the NVIDIA GPU instead of silently running on the iGPU. The dGPU wakes during RTX playback (expected on battery). Falls back to mpv's default adapter if pinning doesn't match.
+
+### Fixed
+- **Archive file dates**: files inside the release `.zip` now carry their real modified time instead of the ZIP epoch placeholder that showed up as **1979-12-31 / 1980-01-01** in Explorer.
+
+## 2026-06-21.2
+
+### Added
+- **About / Updates section in client settings**: shows the full version and a **Check for updates** button that runs the update check on demand (shows the update modal, or a "You're up to date" toast). More discoverable than the right-click About dialog.
+
+## 2026-06-21.1
+
+### Added
+- **In-app updater**: on startup the app checks GitHub for a newer release and, if found, shows a modal with the changelog and an **Update now** button. Clicking it downloads the release, closes the app, replaces the install in place, and relaunches — no manual steps. (Windows; this build is the first that can detect future updates.)
+
+### Changed
+- **Playback Info RTX status is now truthful** (real mpv outcome), confirmed working on RTX hardware: shows **Active** when mpv accepts the d3d11vpp filter, **Unsupported** if the GPU/driver rejects it, or **Off**. RTX HDR active is detected reliably; the mpv log subscription is auto-raised to verbose while RTX is on so VSR can also confirm **Active** without changing your log level.
+
+## 2026-06-21
+
+### Fixed
+- **Server connection failure**: the app version contained a non-ASCII character that was sent in the auth/HTTP headers, which the server rejected — every request (including the connectivity check) failed. The version string is now ASCII-only. Note: the browser login session isn't carried over to this build's separate data dir, so you'll sign in once (the server address is migrated for you).
+- **Playback Info RTX status** now actually shows: the indicator was wired into the wrong player object/format and never appeared. It's now reported by the real mpv player's `getStats()` as an "RTX Video Enhancement" category with RTX VSR and RTX HDR on separate rows.
+
+### Changed
+- **Playback Info RTX status is now truthful**, not just the setting: it reflects mpv's real d3d11vpp outcome — **Active** (confirmed), **Failed (GPU rejected)** / **Unsupported** (mpv reported a problem), **On** (enabled and applied, no error), or **Off**. (A confirmed "Active" requires verbose logging, since mpv only logs success at verbose; failures are always surfaced.)
+- CI builds/releases purely from `v*` tag pushes now; removed the unused non-Windows workflows and the flaky `workflow_dispatch` path that once ran on `main` and skipped the release.
+
+## 2026-06-20
+
+First RTX build. Based on upstream jellyfin-desktop `3.0.0-dev@676919e`.
+
+### Added
+- **NVIDIA RTX Video Super Resolution (VSR)** — AI upscaling, toggleable in client settings → Playback (Windows only).
+- **NVIDIA RTX Video HDR** — AI SDR→HDR conversion, toggleable in client settings → Playback (Windows only).
+- **Playback Info** now reports RTX VSR and RTX HDR status separately.
+- **One-time settings migration** from a stock `jellyfin-desktop` install on first run.
+- In-app version now shows the build date and the upstream commit it was built from.
+
+### Changed
+- Enabling RTX forces `hwdec=d3d11va` and `gpu-api=d3d11` so the RTX path engages.
+- Separate data directory (`jellyfin-desktop-rtx`) so this build doesn't share config with stock jellyfin-desktop.
+- Distinct branding: green icon and "Jellyfin Desktop RTX" title.
+- CI builds Windows x64 only and publishes a GitHub Release (no artifact upload; caches cleaned after each build).

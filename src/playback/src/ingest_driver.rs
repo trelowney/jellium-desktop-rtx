@@ -4,7 +4,9 @@
 //! shutdown) that don't flow through the coordinator queue.
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::Receiver;
 use jfn_mpv::{Event, PropertyValue};
@@ -218,6 +220,19 @@ pub fn jfn_playback_observe_mpv_properties(backend: u8) -> bool {
             c"video-frame-info",
             mpv_format::MPV_FORMAT_NODE,
         ),
+        // The three stages RTX status is derived from: what was decoded, what
+        // the filter chain produced, and what reaches the display.
+        (VIDEO_PARAMS, c"video-params", mpv_format::MPV_FORMAT_NODE),
+        (
+            VIDEO_OUT_PARAMS,
+            c"video-out-params",
+            mpv_format::MPV_FORMAT_NODE,
+        ),
+        (
+            VIDEO_TARGET_PARAMS,
+            c"video-target-params",
+            mpv_format::MPV_FORMAT_NODE,
+        ),
     ];
 
     for &(id, name, fmt) in pairs {
@@ -317,6 +332,9 @@ pub fn jfn_playback_start_mpv_event_thread() -> bool {
     let Some(handle) = jfn_mpv::boot::current_handle() else {
         return false;
     };
+    // Tap mpv's log before the drain thread starts consuming it, so the first
+    // d3d11vpp RTX line can't be missed.
+    jfn_mpv::set_log_observer(observe_mpv_log);
     let (events, rx) = match jfn_mpv::EventLoop::spawn(handle) {
         Ok(pair) => pair,
         Err(e) => {
@@ -351,13 +369,338 @@ pub fn jfn_playback_stop_mpv_event_thread() {
     }
 }
 
+/// Surface mpv's d3d11vpp RTX outcome to the web UI (Playback Info). mpv logs
+/// success at verbose and failure at warn, so forward whichever level arrives.
+/// Pushed over the same exec_js bridge used for other native->web updates;
+/// the JS side stashes it for the player's getStats().
+fn report_rtx_status_from_log(text: &str) {
+    let push = |feature: &str, state: &str| {
+        crate::exec_js::call(&format!(
+            "window._nativeRtxStatus&&window._nativeRtxStatus('{feature}','{state}')"
+        ));
+    };
+    // VSR: success is verbose-only ("enabled"); failure is a warning.
+    if text.contains("Failed to enable NVIDIA RTX Super Resolution") {
+        push("vsr", "failed");
+    } else if text.contains("NVIDIA RTX Super Resolution enabled") {
+        push("vsr", "active");
+    }
+    // HDR: check failures first — the unsupported-format warning also contains
+    // "for NVIDIA RTX Video HDR". The "Tagging image output as HDR ..." warning
+    // is emitted only on the success path and arrives without verbose logging.
+    if text.contains("Failed to enable NVIDIA RTX Video HDR")
+        || text.contains("NVIDIA RTX Video HDR not supported")
+        || text.contains("not supported for NVIDIA RTX Video HDR")
+    {
+        push("hdr", "unsupported");
+    } else if text.contains("Tagging image output as HDR")
+        || text.contains("NVIDIA RTX Video HDR enabled")
+    {
+        push("hdr", "active");
+    }
+}
+
+/// Forward the demuxer's buffer figures to the web UI (Playback Info): how many
+/// bytes are queued ahead of the decoder, how much media that is, and how fast
+/// the buffer is filling.
+///
+/// mpv fires `demuxer-cache-state` on every demuxer update — far more often than
+/// a stats panel can use — so this throttles to about one push per second, which
+/// is also the window `raw-input-rate` is measured over. Fields mpv documents as
+/// "missing if unavailable" are forwarded as `null`; the JS side renders those as
+/// a dash instead of inventing a zero.
+/// Sample GPU utilisation and push it to the web UI, about once a second.
+///
+/// Driven off `time-pos`, which ticks per frame — far more often than a stats
+/// panel can use, and NVML is a driver call rather than a free read, so it is
+/// throttled. This is the only remaining evidence that RTX Super Resolution is
+/// doing work: the driver will not say whether it is engaged, but it cannot hide
+/// the cost.
+fn push_gpu_load() {
+    const MIN_INTERVAL: Duration = Duration::from_millis(1000);
+    static LAST: parking_lot::Mutex<Option<Instant>> = parking_lot::Mutex::new(None);
+
+    {
+        let now = Instant::now();
+        let mut last = LAST.lock();
+        if let Some(prev) = *last
+            && now.duration_since(prev) < MIN_INTERVAL
+        {
+            return;
+        }
+        *last = Some(now);
+    }
+    let Some(load) = jfn_mpv::gpu_load() else {
+        return;
+    };
+    crate::exec_js::call(&format!(
+        "window._nativeGpuLoad&&window._nativeGpuLoad({},{})",
+        load.gpu, load.memory
+    ));
+}
+
+/// One stage of the video pipeline, as the web UI needs it. Everything is
+/// optional: mpv leaves sub-properties out until a frame has been decoded, and
+/// a missing value must read as "unknown" rather than as a claim.
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StageParams {
+    w: Option<i64>,
+    h: Option<i64>,
+    gamma: Option<String>,
+    primaries: Option<String>,
+    pixelformat: Option<String>,
+}
+
+impl StageParams {
+    fn from_node(node: &jfn_mpv::Node) -> Self {
+        let text = |key: &str| {
+            node.get(key)
+                .and_then(jfn_mpv::Node::as_str)
+                .map(str::to_owned)
+        };
+        Self {
+            w: node.get("w").and_then(jfn_mpv::Node::as_int),
+            h: node.get("h").and_then(jfn_mpv::Node::as_int),
+            gamma: text("gamma"),
+            primaries: text("primaries"),
+            pixelformat: text("pixelformat"),
+        }
+    }
+}
+
+/// The three pipeline stages the RTX indicator is derived from. What RTX did is
+/// the difference between them: `d3d11vpp` scaling shows up as `filtered` being
+/// larger than `source`, and an RTX Video HDR conversion shows up as `filtered`
+/// switching to PQ / BT.2020 while `source` is still SDR.
+///
+/// This is the honest ceiling of what can be reported. The driver offers no way
+/// to read back whether Super Resolution is engaged — that was measured, not
+/// assumed — so the web UI presents the observed pipeline rather than a verdict
+/// it cannot support.
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VideoPipeline {
+    source: StageParams,
+    filtered: StageParams,
+    target: StageParams,
+}
+
+/// Latest parameters seen for each stage. mpv reports the three properties
+/// independently, so they are accumulated here and pushed together — the web UI
+/// can only compare them if it has all three.
+static PIPELINE: parking_lot::Mutex<Option<VideoPipeline>> = parking_lot::Mutex::new(None);
+
+/// Fold one stage's update in and push the whole pipeline to the web UI.
+fn push_video_pipeline(id: u64, value: &PropertyValue) {
+    use crate::ingest::observe_id::{VIDEO_OUT_PARAMS, VIDEO_PARAMS, VIDEO_TARGET_PARAMS};
+
+    let PropertyValue::Node(node) = value else {
+        return;
+    };
+    let stage = StageParams::from_node(node);
+    let snapshot = {
+        let mut guard = PIPELINE.lock();
+        let pipeline = guard.get_or_insert_with(VideoPipeline::default);
+        match id {
+            VIDEO_PARAMS => pipeline.source = stage,
+            VIDEO_OUT_PARAMS => pipeline.filtered = stage,
+            VIDEO_TARGET_PARAMS => pipeline.target = stage,
+            _ => return,
+        }
+        pipeline.clone()
+    };
+    apply_rtx_scaling_decision(&snapshot);
+
+    let Some(json) = jfn_js_json::to_js_json(&snapshot) else {
+        return;
+    };
+    crate::exec_js::call(&format!(
+        "window._nativeVideoPipeline&&window._nativeVideoPipeline({json})"
+    ));
+}
+
+/// Turn the Super Resolution scaling stage on or off to match what the output
+/// actually needs.
+///
+/// RTX only upscales, so it earns its cost only when the video output is larger
+/// than the decoded frame. Playing a 1080p file on a 1080p screen, or a 4K file
+/// on a 1440p one, would otherwise still enlarge every frame 2x and have the
+/// video output shrink it straight back — full GPU cost for a picture that ends
+/// up where it started. Neither size is known before a file plays, hence the
+/// decision here rather than at startup.
+///
+/// The comparison is against the real output size, not the monitor's native
+/// resolution: a 720p window on a 4K display gains nothing either.
+///
+/// No-op unless Super Resolution is enabled and an NVIDIA GPU was found, and the
+/// filter is only reconfigured when the decision actually changes, so a resize
+/// that does not cross the threshold costs nothing.
+fn apply_rtx_scaling_decision(pipeline: &VideoPipeline) {
+    static APPLIED: parking_lot::Mutex<Option<bool>> = parking_lot::Mutex::new(None);
+
+    let (Some(scaled), Some(plain)) = (
+        jfn_mpv::boot::rtx_vf_scaled(),
+        jfn_mpv::boot::rtx_vf_plain(),
+    ) else {
+        return;
+    };
+    let (Some(src_w), Some(src_h)) = (pipeline.source.w, pipeline.source.h) else {
+        return;
+    };
+    let (Some(out_w), Some(out_h)) = (pipeline.target.w, pipeline.target.h) else {
+        return;
+    };
+    if src_w <= 0 || src_h <= 0 || out_w <= 0 || out_h <= 0 {
+        return;
+    }
+
+    // Either dimension being larger means there is something to upscale;
+    // anamorphic content can gain on one axis alone.
+    let want_scaling = out_w > src_w || out_h > src_h;
+    {
+        let mut applied = APPLIED.lock();
+        if *applied == Some(want_scaling) {
+            return;
+        }
+        *applied = Some(want_scaling);
+    }
+
+    let vf = if want_scaling { scaled } else { plain };
+    let Ok(name) = std::ffi::CString::new("vf") else {
+        return;
+    };
+    let Ok(value) = std::ffi::CString::new(vf) else {
+        return;
+    };
+    unsafe { jfn_mpv::api::jfn_mpv_set_property_string_async(name.as_ptr(), value.as_ptr()) };
+    if want_scaling {
+        tracing::info!(
+            target: "mpv",
+            "RTX Super Resolution scaling on: {src_w}x{src_h} -> output {out_w}x{out_h}"
+        );
+    } else {
+        tracing::info!(
+            target: "mpv",
+            "RTX Super Resolution scaling off: {src_w}x{src_h} is not smaller than output {out_w}x{out_h}; upscaling would be discarded"
+        );
+    }
+}
+
+/// The buffer figures handed to the web UI. Fields mpv documents as "missing if
+/// unavailable" stay `Option`, so the JS side can render a dash instead of
+/// inventing a zero.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BufferStats {
+    fw_bytes: Option<i64>,
+    max_bytes: i64,
+    rate_bps: Option<i64>,
+    seconds: Option<f64>,
+    eof_cached: bool,
+    underrun: bool,
+    idle: bool,
+}
+
+fn push_buffer_stats(value: &PropertyValue) {
+    const MIN_INTERVAL: Duration = Duration::from_millis(900);
+    static LAST: parking_lot::Mutex<Option<Instant>> = parking_lot::Mutex::new(None);
+
+    let PropertyValue::Node(node) = value else {
+        return;
+    };
+    {
+        let now = Instant::now();
+        let mut last = LAST.lock();
+        if let Some(prev) = *last
+            && now.duration_since(prev) < MIN_INTERVAL
+        {
+            return;
+        }
+        *last = Some(now);
+    }
+    // `fw-bytes` and `raw-input-rate` are documented as INT64, `cache-duration`
+    // as DOUBLE; read either shape so a type change upstream degrades to a
+    // missing row rather than a wrong one.
+    let int_field = |key: &str| {
+        node.get(key)
+            .and_then(|v| v.as_int().or_else(|| v.as_double().map(|d| d as i64)))
+    };
+    let flag_field = |key: &str| node.get(key).and_then(jfn_mpv::Node::as_flag);
+    let payload = BufferStats {
+        fw_bytes: int_field("fw-bytes"),
+        max_bytes: jfn_mpv::boot::forward_buffer_bytes(),
+        rate_bps: int_field("raw-input-rate"),
+        seconds: node
+            .get("cache-duration")
+            .and_then(jfn_mpv::Node::as_double),
+        eof_cached: flag_field("eof-cached").unwrap_or(false),
+        underrun: flag_field("underrun").unwrap_or(false),
+        idle: flag_field("idle").unwrap_or(false),
+    };
+    // Emitted into JS source, so it goes through the JS-safe encoder rather
+    // than plain JSON.
+    let Some(json) = jfn_js_json::to_js_json(&payload) else {
+        return;
+    };
+    crate::exec_js::call(&format!(
+        "window._nativeBufferStats&&window._nativeBufferStats({json})"
+    ));
+}
+
+/// One-shot: if RTX was enabled in settings but skipped because no NVIDIA GPU is
+/// present (see `jfn_mpv::boot::probe_nvidia_adapter`), tell the web UI so
+/// Playback Info shows "Unsupported" rather than a misleading "On". Driven off the
+/// first `time-pos` tick, by which point a file is playing and the CEF page —
+/// which renders the player UI itself — is guaranteed loaded, so the push lands.
+fn push_rtx_skip_status_once() {
+    static PUSHED: AtomicBool = AtomicBool::new(false);
+    if PUSHED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    let push = |feature: &str| {
+        crate::exec_js::call(&format!(
+            "window._nativeRtxStatus&&window._nativeRtxStatus('{feature}','unsupported')"
+        ));
+    };
+    if jfn_mpv::boot::rtx_skipped_no_gpu_vsr() {
+        push("vsr");
+    }
+    if jfn_mpv::boot::rtx_skipped_no_gpu_hdr() {
+        push("hdr");
+    }
+}
+
+/// Adapter for [`jfn_mpv::set_log_observer`]. The event loop forwards log
+/// messages straight to tracing rather than to consumers, but mpv's log is the
+/// only place `d3d11vpp` reports whether RTX actually engaged, so tap it here.
+fn observe_mpv_log(msg: &jfn_mpv::LogMessage) {
+    report_rtx_status_from_log(&msg.text);
+}
+
 fn ingest_events(rx: Receiver<Event>) {
     for event in rx {
-        if let Event::PropertyChange { id, ref value, .. } = event
-            && id == crate::ingest::observe_id::FULLSCREEN
-            && let PropertyValue::Flag(f) = value
-        {
-            invoke_fullscreen_handler(*f);
+        if let Event::PropertyChange { id, ref value, .. } = event {
+            if id == crate::ingest::observe_id::FULLSCREEN
+                && let PropertyValue::Flag(f) = value
+            {
+                invoke_fullscreen_handler(*f);
+            }
+            if id == crate::ingest::observe_id::TIME_POS {
+                push_rtx_skip_status_once();
+                push_gpu_load();
+            }
+            if id == crate::ingest::observe_id::CACHE_STATE {
+                push_buffer_stats(value);
+            }
+            if matches!(
+                id,
+                crate::ingest::observe_id::VIDEO_PARAMS
+                    | crate::ingest::observe_id::VIDEO_OUT_PARAMS
+                    | crate::ingest::observe_id::VIDEO_TARGET_PARAMS
+            ) {
+                push_video_pipeline(id, value);
+            }
         }
         let Some(lease) = jfn_platform_abi::try_lease() else {
             return;

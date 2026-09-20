@@ -20,6 +20,7 @@ mod resource;
 mod runtime;
 mod server_probe;
 mod state;
+mod updater;
 mod v8_handler;
 pub mod version;
 mod web_input;
@@ -31,6 +32,8 @@ pub use web_overlay::{CloseDeliveryError, WebOverlay, WebOverlayConfig};
 
 pub const APP_VERSION: &str = env!("JFN_APP_VERSION");
 pub const APP_VERSION_FULL: &str = env!("JFN_APP_VERSION_FULL");
+/// Release tag this build was produced from (CI), or "" for local builds.
+pub const APP_RELEASE_TAG: &str = env!("JFN_RELEASE_TAG");
 pub use runtime::{
     BrowserCef, DebugPort, DebuggingPort, InitError, InitOptions, InitializedCef,
     InvalidDebuggingPort, LoadError, LoadedCef, LogSeverity, ProcessDispatch, ShutdownError,

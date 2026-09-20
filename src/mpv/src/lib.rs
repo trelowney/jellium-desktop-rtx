@@ -17,6 +17,7 @@ mod event_loop;
 mod handle;
 mod log;
 mod node;
+mod nvml;
 mod property;
 
 pub mod api;
@@ -30,6 +31,9 @@ pub use error::{Error, Result};
 pub use event::{EndFileReason, Event, LogMessage, ObserveId, PropertyValue, ReplyUserdata};
 pub use event_loop::EventLoop;
 pub use handle::{Handle, WakeupCallback};
-pub use log::{LogLevel, forward_to_tracing as forward_log_to_tracing};
+pub use log::{
+    LogLevel, forward_to_tracing as forward_log_to_tracing, set_observer as set_log_observer,
+};
 pub use node::{Node, NodeArray, NodeMap};
+pub use nvml::{GpuLoad, gpu_load};
 pub use property::Format;

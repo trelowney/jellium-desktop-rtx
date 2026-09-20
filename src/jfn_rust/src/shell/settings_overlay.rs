@@ -33,6 +33,8 @@ pub enum Outcome {
     None,
     Dismiss,
     ResetSavedServer,
+    /// Dismiss, then have jellyfin-web run the release check.
+    CheckForUpdates,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -145,6 +147,10 @@ impl SettingsOverlay {
             Message::About(crate::shell::about::Message::OpenPath(path)) => {
                 self.about.open(&path);
                 Outcome::None
+            }
+            Message::About(crate::shell::about::Message::CheckForUpdates) => {
+                let _ = self.settings.dismiss();
+                Outcome::CheckForUpdates
             }
         }
     }

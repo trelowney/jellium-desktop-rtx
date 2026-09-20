@@ -78,6 +78,7 @@
     // window.jmpInfo - settings and device info
     window.jmpInfo = {
         version: '__APP_VERSION__',
+        releaseTag: '__APP_RELEASE_TAG__',
         deviceName: _savedSettings.deviceName || _savedSettings.deviceNameDefault,
         mode: 'desktop',
         userAgent: navigator.userAgent,
@@ -91,7 +92,10 @@
         settings: {
             main: { enableMPV: true, fullscreen: false, userWebClient: '__SERVER_URL__' },
             playback: {
-                hwdec: _savedSettings.hwdec || 'auto'
+                hwdec: _savedSettings.hwdec || 'auto',
+                cacheSize: _savedSettings.cacheSize || 256,
+                rtxVsr: !!_savedSettings.rtxVsr,
+                rtxHdr: !!_savedSettings.rtxHdr
             },
             audio: {
                 audioPassthrough: _savedSettings.audioPassthrough || '',
@@ -111,7 +115,17 @@
         },
         settingsDescriptions: {
             playback: [
-                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Hardware video decoding mode. Use "auto" for automatic detection or "no" to disable.', options: _savedSettings.hwdecOptions }
+                { key: 'hwdec', displayName: 'Hardware Decoding', help: 'Hardware video decoding mode. Use "auto" for automatic detection or "no" to disable.', options: _savedSettings.hwdecOptions },
+                { key: 'cacheSize', displayName: 'Buffer Size', help: 'How much of the stream to buffer ahead of playback. Larger values ride out network hiccups but use that much RAM. Requires restart.', options: [
+                    { value: 32, title: '32 MB' },
+                    { value: 64, title: '64 MB' },
+                    { value: 128, title: '128 MB' },
+                    { value: 256, title: '256 MB (default)' },
+                    { value: 512, title: '512 MB' },
+                    { value: 1024, title: '1 GB' },
+                    { value: 2048, title: '2 GB' },
+                    { value: 4096, title: '4 GB' }
+                ]}
             ],
             audio: [
                 { key: 'audioPassthrough', displayName: 'Audio Passthrough', help: 'Comma-separated list of codecs to pass through to the audio device (e.g. ac3,eac3,dts-hd,truehd). Leave empty to disable.', inputType: 'textarea' },
@@ -141,6 +155,23 @@
         settingsUpdate: [],
         settingsDescriptionsUpdate: []
     };
+
+    // Windows + NVIDIA RTX only: AI video enhancement via mpv's d3d11vpp filter.
+    // Hidden elsewhere because the filter only exists on the Windows mpv build.
+    if (navigator.platform.startsWith('Win')) {
+        jmpInfo.settingsDescriptions.playback.push(
+            {
+                key: 'rtxVsr',
+                displayName: 'RTX Video Super Resolution',
+                help: 'NVIDIA RTX AI upscaling and detail enhancement. Requires an RTX 20-series or newer GPU. Forces D3D11 hardware decoding. Requires restart.'
+            },
+            {
+                key: 'rtxHdr',
+                displayName: 'RTX Video HDR',
+                help: 'NVIDIA RTX AI SDR-to-HDR conversion. Requires an RTX 20-series or newer GPU and an HDR display set to HDR mode. Forces D3D11 hardware decoding. Requires restart.'
+            }
+        );
+    }
 
     // macOS-only: transparent titlebar toggle (shown first in Advanced section)
     if (navigator.platform.startsWith('Mac')) {
@@ -370,6 +401,33 @@
         console.debug('[Media] _nativeSeek:', positionMs);
         window.api.input.positionSeek(positionMs);
     };
+    // RTX d3d11vpp runtime outcome from mpv (per feature: 'active' | 'failed' |
+    // 'unsupported'). Stashed for the player's getStats() -> Playback Info panel.
+    window._nativeRtxStatus = function(feature, state) {
+        window.__rtxStatus = window.__rtxStatus || {};
+        window.__rtxStatus[feature] = state;
+    };
+    // Forward-buffer figures from mpv's demuxer-cache-state, pushed about once a
+    // second while data is being read. Stashed with a receive timestamp so
+    // getStats() can tell a live fill rate from one frozen by a paused or
+    // finished stream.
+    window._nativeBufferStats = function(stats) {
+        stats.at = Date.now();
+        window.__bufferStats = stats;
+    };
+    // Frame parameters at three points in the pipeline: as decoded (source),
+    // after the filter chain (filtered, i.e. after d3d11vpp), and as handed to
+    // the display (target). What RTX actually did is the difference between
+    // them, which is the only observable evidence the driver leaves behind.
+    window._nativeVideoPipeline = function(pipeline) {
+        window.__videoPipeline = pipeline;
+    };
+    // GPU utilisation from NVML, sampled about once a second while playing. The
+    // driver will not say whether Super Resolution is engaged, so this is the
+    // only measure of whether it is doing work.
+    window._nativeGpuLoad = function(gpu, memory) {
+        window.__gpuLoad = { gpu: gpu, memory: memory, at: Date.now() };
+    };
 
     // window.NativeShell - app info and plugins
     const plugins = ['mpvVideoPlayer', 'mpvAudioPlayer', 'inputPlugin'];
@@ -505,6 +563,110 @@
             }).observe(document.head, { childList: true });
         }
     });
+
+    // ---- Self-update check (Windows) -------------------------------------
+    // Exposes window.__rtxCheckForUpdates(manual): asks GitHub for the latest
+    // release and, if its tag differs from the tag THIS build was released as,
+    // shows a modal with the changelog + "Update now" (hands the zip URL to the
+    // native updater). manual=true also surfaces "up to date"/errors as a toast;
+    // the automatic startup check stays silent. All failures are swallowed.
+    (function() {
+        const REPO = 'trelowney/jellium-desktop-rtx';
+        const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+        function showToast(msg) {
+            const t = document.createElement('div');
+            t.textContent = msg;
+            t.style.cssText = 'position:fixed;left:50%;bottom:40px;transform:translateX(-50%);z-index:100000;background:#222;color:#eee;padding:10px 18px;border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.4);font-family:inherit;opacity:0;transition:opacity .2s';
+            document.body.appendChild(t);
+            requestAnimationFrame(() => { t.style.opacity = '1'; });
+            setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 3000);
+        }
+
+        function showModal(rel, asset, current) {
+            const back = document.createElement('div');
+            back.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-family:inherit;';
+            const body = esc(rel.body || '').trim() || 'No release notes.';
+            back.innerHTML =
+                '<div style="background:#202020;color:#eee;max-width:560px;width:90%;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.5);overflow:hidden">' +
+                  '<div style="padding:18px 22px;font-size:1.25em;font-weight:600;border-bottom:1px solid #333">Update available</div>' +
+                  '<div style="padding:14px 22px 0;opacity:.85">Version <b>' + esc(rel.tag_name) + '</b> &nbsp;·&nbsp; you have <b>' + esc(current || 'unknown') + '</b></div>' +
+                  '<pre style="margin:10px 22px;padding:12px;background:#181818;border-radius:6px;max-height:240px;overflow:auto;white-space:pre-wrap;font-size:.85em;line-height:1.4">' + body + '</pre>' +
+                  '<div style="padding:8px 22px 20px;display:flex;gap:10px;justify-content:flex-end">' +
+                    '<button id="rtxUpdLater" style="padding:9px 16px;border:0;border-radius:6px;background:#3a3a3a;color:#eee;cursor:pointer">Later</button>' +
+                    '<button id="rtxUpdNow" style="padding:9px 16px;border:0;border-radius:6px;background:#3da639;color:#fff;cursor:pointer;font-weight:600">Update now</button>' +
+                  '</div>' +
+                '</div>';
+            document.body.appendChild(back);
+            back.querySelector('#rtxUpdLater').onclick = () => back.remove();
+            back.querySelector('#rtxUpdNow').onclick = () => {
+                const btn = back.querySelector('#rtxUpdNow');
+                const later = back.querySelector('#rtxUpdLater');
+                btn.textContent = 'Downloading & restarting…';
+                btn.disabled = true;
+                later.disabled = true;
+                if (window.jmpNative && window.jmpNative.applyUpdate) {
+                    // url, size (bytes, for the progress bar), version tag.
+                    window.jmpNative.applyUpdate(asset.browser_download_url, String(asset.size || 0), rel.tag_name || '');
+                    // Safety net: when the hand-off works the app exits within a
+                    // couple of seconds (and this timer dies with it). If we're
+                    // still alive after a grace period the side-car never took
+                    // over (e.g. it couldn't be launched), so don't leave the
+                    // button stuck forever — recover and point at the manual zip.
+                    setTimeout(() => {
+                        if (!document.body.contains(back)) return;
+                        btn.textContent = 'Update now';
+                        btn.disabled = false;
+                        later.disabled = false;
+                        showToast('Update could not start — download it manually from the Releases page');
+                    }, 12000);
+                } else {
+                    btn.textContent = 'Update now';
+                    btn.disabled = false;
+                    later.disabled = false;
+                    showToast('Self-update is unavailable in this build — download from the Releases page');
+                }
+            };
+        }
+
+        window.__rtxCheckForUpdates = function(manual) {
+            if (!navigator.platform.startsWith('Win')) {
+                if (manual) showToast('Updates are only available on the Windows build');
+                return;
+            }
+            const current = (window.jmpInfo && jmpInfo.releaseTag) || '';
+            if (!current) {
+                if (manual) showToast('Update checking is unavailable for this build');
+                return;
+            }
+            if (manual) showToast('Checking for updates…');
+            fetch('https://api.github.com/repos/' + REPO + '/releases/latest', { headers: { 'Accept': 'application/vnd.github+json' } })
+                .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                .then(rel => {
+                    // Different tag than the one we were built from => newer release.
+                    if (!rel.tag_name || rel.tag_name === current) {
+                        if (manual) showToast("You're up to date (" + current + ')');
+                        return;
+                    }
+                    const asset = (rel.assets || []).find(a => /\.zip$/i.test(a.name));
+                    if (!asset) {
+                        if (manual) showToast('Update found, but no downloadable file');
+                        return;
+                    }
+                    showModal(rel, asset, current);
+                })
+                .catch(e => {
+                    console.debug('[Media] update check skipped:', e);
+                    if (manual) showToast('Update check failed');
+                });
+        };
+
+        // Automatic, silent check shortly after startup (once).
+        if (navigator.platform.startsWith('Win') && !window.__rtxUpdateChecked) {
+            window.__rtxUpdateChecked = true;
+            setTimeout(() => window.__rtxCheckForUpdates(false), 4000);
+        }
+    })();
 
     console.debug('[Media] Native shim installed');
 })();

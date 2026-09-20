@@ -12,6 +12,9 @@ use crate::shell::theme::{self, Theme};
 
 pub const CONFIG_DIRECTORY_CONTROL: Id = Id::new("shell-about-config-directory");
 pub const CURRENT_LOG_CONTROL: Id = Id::new("shell-about-current-log");
+pub const CHECK_FOR_UPDATES_CONTROL: Id = Id::new("shell-about-check-for-updates");
+
+pub const CHECK_FOR_UPDATES_LABEL: &str = "Check for updates";
 
 const VERSION_LABEL: &str = "Version";
 const CEF_LABEL: &str = "CEF";
@@ -19,6 +22,9 @@ const CEF_LABEL: &str = "CEF";
 #[derive(Clone, Debug)]
 pub enum Message {
     OpenPath(PathBuf),
+    /// Asks jellyfin-web's shim to poll GitHub for a newer release and show
+    /// the update dialog. The overlay closes first so the dialog is visible.
+    CheckForUpdates,
 }
 
 pub struct About {
@@ -41,6 +47,14 @@ impl About {
         for (label, id, path) in self.path_actions() {
             rows = rows.push(self.row(label, &path.to_string_lossy(), Some((id, path.clone()))));
         }
+        rows = rows.push(
+            container(controls::action(
+                CHECK_FOR_UPDATES_CONTROL,
+                button(text(CHECK_FOR_UPDATES_LABEL)).on_press(Message::CheckForUpdates),
+                Message::CheckForUpdates,
+            ))
+            .padding(Padding::from([8, 0])),
+        );
 
         about_layout(
             image(crate::shell::logo::handle())
@@ -137,6 +151,7 @@ mod tests {
     #[test]
     fn version_labels_are_exact() {
         assert_eq!([VERSION_LABEL, CEF_LABEL], ["Version", "CEF"]);
+        assert_eq!(CHECK_FOR_UPDATES_LABEL, "Check for updates");
     }
 
     #[test]

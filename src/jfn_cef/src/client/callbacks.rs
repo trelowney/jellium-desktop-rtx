@@ -50,6 +50,10 @@ impl Inner {
     }
 
     fn dispatch_menu_command(&self, id: c_int) {
+        if id == crate::client_impl::context_menu::MENU_ID_CLEAR_CACHE {
+            self.clear_http_cache_and_reload();
+            return;
+        }
         self.invoke_context_menu_dispatcher(id);
     }
 

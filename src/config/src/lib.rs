@@ -22,6 +22,20 @@ pub use hardware_decode::{HWDEC_DEFAULT, Hwdec, UnknownHwdec, hwdec_options};
 
 const DEVICE_NAME_MAX: usize = 64;
 
+/// Forward playback buffer (`--demuxer-max-bytes`) in MiB. Jellyfin Media Player
+/// exposed this as a "cache size" setting; jellium-desktop dropped it, so the RTX
+/// fork brings it back. Bounds match the values offered in the settings UI.
+pub const CACHE_SIZE_MB_DEFAULT: i32 = 256;
+pub const CACHE_SIZE_MB_MIN: i32 = 32;
+pub const CACHE_SIZE_MB_MAX: i32 = 4096;
+
+/// Clamp a requested buffer size into the supported range. Out-of-range values
+/// (hand-edited config, stale UI) fall back to the nearest bound rather than
+/// handing mpv something absurd.
+fn clamp_cache_size(mb: i32) -> i32 {
+    mb.clamp(CACHE_SIZE_MB_MIN, CACHE_SIZE_MB_MAX)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct JfnWindowGeometry {
     pub x: i32,
@@ -62,6 +76,9 @@ struct SettingsData {
     force_transcoding: bool,
     window_decorations: Option<WindowDecorations>,
     hide_scrollbar: bool,
+    rtx_vsr: bool,
+    rtx_hdr: bool,
+    cache_size_mb: i32,
 }
 
 impl Default for SettingsData {
@@ -80,6 +97,9 @@ impl Default for SettingsData {
             force_transcoding: false,
             window_decorations: None,
             hide_scrollbar: true,
+            rtx_vsr: false,
+            rtx_hdr: false,
+            cache_size_mb: CACHE_SIZE_MB_DEFAULT,
         }
     }
 }
@@ -146,6 +166,15 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     hide_scrollbar: Option<bool>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    rtx_vsr: Option<bool>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    rtx_hdr: Option<bool>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    cache_size: Option<i32>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     device_name: Option<String>,
@@ -216,6 +245,12 @@ struct CliSettings<'a> {
 
     hide_scrollbar: bool,
 
+    rtx_vsr: bool,
+
+    rtx_hdr: bool,
+
+    cache_size: i32,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     device_name: Option<&'a str>,
 
@@ -284,6 +319,15 @@ impl SettingsData {
         if let Some(v) = file.hide_scrollbar {
             self.hide_scrollbar = v;
         }
+        if let Some(v) = file.rtx_vsr {
+            self.rtx_vsr = v;
+        }
+        if let Some(v) = file.rtx_hdr {
+            self.rtx_hdr = v;
+        }
+        if let Some(v) = file.cache_size {
+            self.cache_size_mb = clamp_cache_size(v);
+        }
     }
 
     fn to_file(&self) -> SettingsFile {
@@ -310,6 +354,9 @@ impl SettingsData {
             force_transcoding: self.force_transcoding.then_some(true),
             window_decorations: self.window_decorations,
             hide_scrollbar: (!self.hide_scrollbar).then_some(false),
+            rtx_vsr: self.rtx_vsr.then_some(true),
+            rtx_hdr: self.rtx_hdr.then_some(true),
+            cache_size: (self.cache_size_mb != CACHE_SIZE_MB_DEFAULT).then_some(self.cache_size_mb),
             device_name: (!self.device_name.is_empty()).then(|| self.device_name.clone()),
         }
     }
@@ -327,6 +374,9 @@ impl SettingsData {
             log_level: (!self.log_level.is_empty()).then_some(self.log_level.as_str()),
             force_transcoding: self.force_transcoding,
             hide_scrollbar: self.hide_scrollbar,
+            rtx_vsr: self.rtx_vsr,
+            rtx_hdr: self.rtx_hdr,
+            cache_size: self.cache_size_mb,
             device_name: (!self.device_name.is_empty()).then_some(self.device_name.as_str()),
             device_name_default: default_device_name(),
             hwdec_options: hwdec_options(),
@@ -599,6 +649,18 @@ pub fn titlebar_theme_color() -> bool {
     window_decorations_mode() == WindowDecorations::ServerThemed
 }
 bool_accessors!(hide_scrollbar, set_hide_scrollbar, hide_scrollbar);
+bool_accessors!(rtx_vsr, set_rtx_vsr, rtx_vsr);
+bool_accessors!(rtx_hdr, set_rtx_hdr, rtx_hdr);
+
+/// Forward playback buffer in MiB; always within
+/// [`CACHE_SIZE_MB_MIN`]..=[`CACHE_SIZE_MB_MAX`].
+pub fn cache_size_mb() -> i32 {
+    state().lock().data.cache_size_mb
+}
+
+pub fn set_cache_size_mb(mb: i32) {
+    state().lock().data.cache_size_mb = clamp_cache_size(mb);
+}
 
 pub fn window_geometry() -> JfnWindowGeometry {
     state().lock().data.window
@@ -718,6 +780,9 @@ mod tests {
             force_transcoding: true,
             window_decorations: Some(WindowDecorations::ServerThemed),
             hide_scrollbar: false,
+            rtx_vsr: true,
+            rtx_hdr: true,
+            cache_size_mb: 512,
         };
         let text = serde_json::to_string(&data.to_file()).expect("serializes");
         assert_eq!(
@@ -741,6 +806,9 @@ mod tests {
                 "forceTranscoding",
                 "windowDecorations",
                 "hideScrollbar",
+                "rtxVsr",
+                "rtxHdr",
+                "cacheSize",
                 "deviceName",
             ]
         );
@@ -812,6 +880,9 @@ mod tests {
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
+                "rtxVsr",
+                "rtxHdr",
+                "cacheSize",
                 "deviceName",
                 "deviceNameDefault",
                 "hwdecOptions",
