@@ -3,10 +3,10 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
-## 2026-09-20.1
+## 2026-09-21
 
 ### Added
-- **Series / movie logo in the player.** The video OSD keeps jellyfin-web's title line (`Neagley - S1:E6 - Rocked (2026)`) and shows the clear logo underneath it, lined up with the text — the logo Jellyfin already has for the item (episodes use their series' logo, movies their own). Items without a logo look exactly as before. The logo is part of the OSD header, so it fades in and out with it.
+- **Series / movie logo in the player.** The video OSD keeps jellyfin-web's title line (`Neagley - S1:E6 - Rocked (2026)`) and shows the clear logo underneath it, lined up with the text — the logo Jellyfin already has for the item (episodes use their series' logo, movies their own). Items without a logo look exactly as before. The logo is part of the OSD header, so it fades in and out with it, and Playback Info opens on top of it rather than underneath.
 
 ## 2026-09-20
 

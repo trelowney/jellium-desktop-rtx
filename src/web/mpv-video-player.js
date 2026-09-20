@@ -196,7 +196,26 @@
     // 7.5em tall with a top gradient and fades with the OSD, so the logo needs
     // no show/hide plumbing of its own; the node dies with the page.
     const OSD_LOGO_CLASS = 'rtxOsdLogo';
+    const OSD_LOGO_HEADER_CLASS = 'rtxOsdHeaderWithLogo';
     const OSD_LOGO_HEIGHT_PX = 240;  // requested from the server; CSS scales it down
+
+    // The header grows to fit the logo (its gradient stretches with it), and
+    // Playback Info (.playerStats, top:5em, no z-index of its own) is lifted
+    // above the header's z-index:1 so the logo sits behind it, not on top.
+    const OSD_LOGO_CSS = `
+.skinHeader-withBackground.osdHeader.${OSD_LOGO_HEADER_CLASS} { height: 9.5em; }
+.${OSD_LOGO_CLASS} { padding: 0.4em 1em 0 0; pointer-events: none; }
+.${OSD_LOGO_CLASS} img { display: block; height: 4.6em; max-width: 30em; object-fit: contain; object-position: left center; filter: drop-shadow(0 2px 4px rgba(0,0,0,.7)); }
+.playerStats { z-index: 2; }
+`;
+
+    function ensureOsdLogoStyle() {
+        if (document.getElementById('rtxOsdLogoStyle')) return;
+        const style = document.createElement('style');
+        style.id = 'rtxOsdLogoStyle';
+        style.textContent = OSD_LOGO_CSS;
+        document.head.appendChild(style);
+    }
 
     // Episodes carry their series' logo as ParentLogo*; movies (and series
     // played directly) carry it in their own ImageTags.
@@ -221,6 +240,7 @@
 
     function removeOsdLogo() {
         for (const el of document.querySelectorAll('.' + OSD_LOGO_CLASS)) el.remove();
+        for (const el of document.querySelectorAll('.' + OSD_LOGO_HEADER_CLASS)) el.classList.remove(OSD_LOGO_HEADER_CLASS);
     }
 
     // `.videoOsd-appBar` is the React toolbar (jellyfin-web 12), `.headerTop`
@@ -253,18 +273,19 @@
             ? Math.max(0, Math.round(title.getBoundingClientRect().left - header.getBoundingClientRect().left))
             : 0;
 
+        ensureOsdLogoStyle();
         const box = document.createElement('div');
         box.className = OSD_LOGO_CLASS;
         box.dataset.url = url;
-        box.style.cssText = `padding:0.35em 1em 0 ${left}px;pointer-events:none;`;
+        box.style.paddingLeft = `${left}px`;
         const img = document.createElement('img');
         img.alt = '';
         img.draggable = false;
-        img.style.cssText = 'display:block;height:3.4em;max-width:26em;object-fit:contain;object-position:left center;filter:drop-shadow(0 2px 4px rgba(0,0,0,.7));';
-        img.addEventListener('error', () => box.remove());
+        img.addEventListener('error', () => removeOsdLogo());
         img.src = url;
         box.appendChild(img);
         toolbar.insertAdjacentElement('afterend', box);
+        header.classList.add(OSD_LOGO_HEADER_CLASS);
     }
 
     class mpvVideoPlayer extends window.MpvPlayerBase {
