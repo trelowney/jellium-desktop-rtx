@@ -17,6 +17,14 @@ A personal fork of [**jellium-desktop**](https://github.com/andrewrabert/jellium
 - **Buffer size is configurable** — Settings → Playback lets you pick how much of the stream to buffer ahead (32 MB – 4 GB, default 256 MB), the setting Jellyfin Media Player had and upstream dropped.
 - **Playback Info shows the buffer live** — how much is buffered of the configured limit, how much playback time that covers, the current fill rate, and what the buffer is doing (filling / full / underrun).
 - **Logo in the player** — the video OSD shows the series' (or movie's) clear logo under the title line, using the logo Jellyfin already fetched for the item.
+- **Self-updating** — checks GitHub for a newer release shortly after start (and on About → **Check for updates**) and installs it in place; test builds (pre-releases) are never offered.
+- **Hard Reload / Clear Cache and Reload** in the right-click menu — for when a plain *Reload* keeps showing a stale `index.html` (the server answers `304` and Chromium keeps its cached copy, e.g. after installing a server plugin that injects into the page).
+- **Subtitle offset works** — jellyfin-web's Subtitle Offset control is enabled for the mpv player, and whole-second delays no longer reach mpv as `0`.
+- **Styled dropdowns on Windows** — `<select>` menus open as in-page dark menus instead of not opening at all.
+- **NVIDIA-only guard** — refuses to enable RTX on a machine without an NVIDIA GPU, and pins the NVIDIA GPU on Optimus laptops so the filter runs on it.
+- **Hardware decoding defaults to `auto`** (upstream: software decoding); with RTX enabled the client uses `d3d11va` regardless.
+- **Save and close** button in Settings, next to the instant auto-save.
+- **Two Windows fixes upstream `main` still lacks** — startup no longer exits before mpv's window exists (upstream #694), and overlays such as Settings can actually be hidden again (DirectComposition device created with v3).
 - **Distinct branding** — green icon and "Jellium Desktop RTX" title, so it's obvious which build is running.
 - **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-09-20 (<commit>) - base jellium-desktop 0.1.0-dev@14dc084`, so you always know the build date and which upstream commit it was made from.
 
