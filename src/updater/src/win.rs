@@ -205,7 +205,17 @@ fn download(url: &str, tmp: &Path, shared: &Shared) -> Result<(), String> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     let mut child = std::process::Command::new("curl")
-        .args(["-L", "-sS", "--fail", "-o"])
+        // HTTPS only, redirects included.
+        .args([
+            "-L",
+            "-sS",
+            "--fail",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "-o",
+        ])
         .arg(tmp)
         .arg(url)
         .creation_flags(CREATE_NO_WINDOW)
