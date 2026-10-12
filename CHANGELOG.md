@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-10-12
+
+### Fixed
+- **Self-update only installs this fork's own, newer releases.** The download address reaches the app from the web page, i.e. from whatever the Jellyfin server serves, and the updater used to download and unpack whatever it was given. It now accepts only a `.zip` from `github.com/trelowney/jellium-desktop-rtx/releases/download/<tag>/`, only when that release is newer than the running one (so it can't be downgraded either), and downloads over HTTPS only, redirects included. Builds without a release tag never update.
+
 ## 2026-09-21
 
 ### Added
