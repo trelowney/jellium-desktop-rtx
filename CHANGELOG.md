@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-10-12.1
+
+### Added
+- **The app reopens the way you closed it**: fullscreen if you quit in fullscreen, otherwise in a window with its last size and position (which it already remembered), as Jellyfin Media Player did.
+
 ## 2026-10-12
 
 ### Fixed

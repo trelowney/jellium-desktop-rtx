@@ -49,6 +49,8 @@ impl WindowGeometryController {
     /// Read live state and write it back to config. Called at teardown before
     /// any thread-join that could hang.
     pub fn persist(&self) {
+        // Reopen the way it was closed: fullscreen or windowed.
+        jfn_config::set_window_fullscreen(self.source().snapshot().fullscreen);
         let was_max_before_fs =
             jfn_playback::browser_sink::jfn_playback_was_maximized_before_fullscreen();
         if let Some(g) = geometry_to_persist(

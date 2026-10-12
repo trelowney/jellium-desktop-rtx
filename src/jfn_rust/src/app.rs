@@ -1340,6 +1340,10 @@ fn run_with_cef(
         }
     };
     WEB_OVERLAY.lock().replace(overlay.clone());
+    if jfn_config::window_fullscreen() {
+        tracing::info!(target: "Main", "[FLOW] restoring fullscreen from last session");
+        plat().set_fullscreen(true);
+    }
     RunningRuntime {
         resources,
         manager_thread,

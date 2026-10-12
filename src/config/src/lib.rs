@@ -70,6 +70,7 @@ struct SettingsData {
     log_level: String,
     device_name: String,
     window: JfnWindowGeometry,
+    window_fullscreen: bool,
     audio_exclusive: bool,
     disable_gpu_compositing: bool,
     transparent_titlebar: bool,
@@ -91,6 +92,7 @@ impl Default for SettingsData {
             log_level: String::new(),
             device_name: String::new(),
             window: JfnWindowGeometry::default(),
+            window_fullscreen: false,
             audio_exclusive: false,
             disable_gpu_compositing: false,
             transparent_titlebar: true,
@@ -132,6 +134,9 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     window_maximized: Option<bool>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    window_fullscreen: Option<bool>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     hwdec: Option<Hwdec>,
@@ -301,6 +306,9 @@ impl SettingsData {
         if let Some(v) = file.window_maximized {
             self.window.maximized = v;
         }
+        if let Some(v) = file.window_fullscreen {
+            self.window_fullscreen = v;
+        }
         if let Some(v) = file.audio_exclusive {
             self.audio_exclusive = v;
         }
@@ -343,6 +351,7 @@ impl SettingsData {
             window_x: position.then_some(self.window.x),
             window_y: position.then_some(self.window.y),
             window_maximized: Some(self.window.maximized),
+            window_fullscreen: self.window_fullscreen.then_some(true),
             hwdec: (self.hwdec != Hwdec::default()).then_some(self.hwdec),
             audio_passthrough: (!self.audio_passthrough.is_empty())
                 .then(|| self.audio_passthrough.clone()),
@@ -611,6 +620,7 @@ pub fn set_device_name(raw: &str, platform_default: &str) {
 }
 
 bool_accessors!(audio_exclusive, set_audio_exclusive, audio_exclusive);
+bool_accessors!(window_fullscreen, set_window_fullscreen, window_fullscreen);
 bool_accessors!(
     disable_gpu_compositing,
     set_disable_gpu_compositing,
@@ -774,6 +784,7 @@ mod tests {
                 logical_height: 6,
                 maximized: true,
             },
+            window_fullscreen: true,
             audio_exclusive: true,
             disable_gpu_compositing: true,
             transparent_titlebar: false,
@@ -796,6 +807,7 @@ mod tests {
                 "windowX",
                 "windowY",
                 "windowMaximized",
+                "windowFullscreen",
                 "hwdec",
                 "audioPassthrough",
                 "audioExclusive",
