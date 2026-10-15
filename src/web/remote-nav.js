@@ -675,11 +675,19 @@
     }
 
     // The header is rendered by React and can be rebuilt at any time, so the
-    // button is put back whenever it goes missing.
+    // button is put back whenever it goes missing. The page also keeps a
+    // hidden legacy header; the video player removes the React one, and the
+    // button would be left behind in the hidden one, so it follows the React
+    // header whenever that exists.
     function placeToggle() {
-        if (document.getElementById('jrn-toggle')) return;
-        var search = document.querySelector('header.MuiAppBar-root [aria-label="Search"], .skinHeader .headerSearchButton');
+        var search = document.querySelector('header.MuiAppBar-root [aria-label="Search"]') ||
+            document.querySelector('.skinHeader .headerSearchButton');
         if (!search || !search.parentElement) return;
+        var existing = document.getElementById('jrn-toggle');
+        if (existing) {
+            if (existing.nextElementSibling !== search) search.parentElement.insertBefore(existing, search);
+            return;
+        }
         var b = document.createElement('button');
         b.id = 'jrn-toggle';
         b.type = 'button';

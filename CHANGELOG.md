@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-10-15.1
+
+### Fixed
+- **The remote button stays in the top bar after playback.** Once a video had been played, the button ended up in a hidden copy of the top bar and was gone until the app was restarted.
+
 ## 2026-10-15
 
 ### Added
