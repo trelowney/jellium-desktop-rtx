@@ -108,11 +108,13 @@
         open = function () { finish(null); };
         function onDismiss() { finish(null); }
 
+        // The keys the menu uses stop here, so the opener below does not see
+        // the Enter that closed the menu and open it again.
         function onKeyDown(e) {
-            if (e.key === 'Escape') { e.preventDefault(); finish(null); }
-            else if (e.key === 'ArrowDown') { e.preventDefault(); setActive(active < rows.length - 1 ? active + 1 : 0); }
-            else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(active > 0 ? active - 1 : rows.length - 1); }
-            else if ((e.key === 'Enter' || e.key === ' ') && active >= 0) { e.preventDefault(); finish(rowIndex[active]); }
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(null); }
+            else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); setActive(active < rows.length - 1 ? active + 1 : 0); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); setActive(active > 0 ? active - 1 : rows.length - 1); }
+            else if ((e.key === 'Enter' || e.key === ' ') && active >= 0) { e.preventDefault(); e.stopPropagation(); finish(rowIndex[active]); }
             else if (e.key === 'Tab') { finish(null); }
         }
 
