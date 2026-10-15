@@ -57,8 +57,21 @@
         return isShown(el) || (el.firstElementChild && isShown(el.firstElementChild));
     }
 
+    // The update dialog has no class of its own; it is the child of <body>
+    // that holds its Later button, or its progress text once the macOS
+    // download has started.
+    function updateDialog() {
+        var el = document.getElementById('rtxUpdLater') || document.getElementById('rtxUpdText');
+        if (!el) return null;
+        while (el.parentElement && el.parentElement !== document.body) el = el.parentElement;
+        return el.parentElement && isShown(el) ? el : null;
+    }
+
     // Topmost open menu or dialog, if any; navigation stays inside it.
     function openOverlay() {
+        // The app's own update dialog (native-shim.js) sits above everything.
+        var upd = updateDialog();
+        if (upd) return upd;
         var list = [].slice.call(document.querySelectorAll(
             '.MuiModal-root, .MuiPopover-root, .dialogContainer .dialog.opened, .actionSheet.opened'));
         for (var i = list.length - 1; i >= 0; i--) {
@@ -438,7 +451,11 @@
     function back() {
         var overlay = openOverlay();
         if (overlay) {
-            if (overlay.classList.contains('dialog') || overlay.classList.contains('actionSheet')) {
+            if (overlay === updateDialog()) {
+                // Same as Later; once the update has started there is nothing to cancel.
+                var later = document.getElementById('rtxUpdLater');
+                if (later && !later.disabled) later.click();
+            } else if (overlay.classList.contains('dialog') || overlay.classList.contains('actionSheet')) {
                 history.back();
             } else {
                 // React menus close on their own Escape handler.
@@ -478,6 +495,13 @@
         // The in-page dropdown (select-menu.js) handles its own keys.
         if (document.getElementById('_jselect')) return;
         var key = e.key;
+
+        // While the update downloads nothing on the page may be opened.
+        var upd = updateDialog();
+        if (upd && !upd.querySelector('button:not([disabled])')) {
+            if (KEYS[key] || key === 'Enter' || key === ' ' || key === 'Escape' || key === 'Backspace') consume(e);
+            return;
+        }
 
         if (isVideoPage()) {
             // The player keeps its own keys (seek, pause); only leaving is ours.
@@ -601,7 +625,15 @@
         var scope = currentScope();
         if (current && isShown(current) && scope.some(function (r) { return r && r.contains(current); })) return;
         var list = units(scope);
-        if (!list.length) return;
+        if (!list.length) {
+            // A dialog with nothing to choose (the update downloading): no
+            // highlight on the page behind it.
+            if (current && openOverlay()) {
+                current.removeAttribute('data-jrn-focus');
+                current = null;
+            }
+            return;
+        }
         var rows = buildRows(list);
         if (openOverlay()) {
             // A menu or dialog just opened: start on its first item.
