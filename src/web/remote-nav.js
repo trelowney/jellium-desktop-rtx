@@ -24,15 +24,14 @@
     var style = document.createElement('style');
     style.textContent =
         'html.jrn-on [data-jrn-focus]:not(.card):not(.listItem){outline:3px solid ' + ACCENT + ' !important;outline-offset:2px;border-radius:4px}' +
-        // The ring is drawn inside the poster: scrollers clip anything outside it.
-        'html.jrn-on .card[data-jrn-focus] .cardBox{transform:scale(1.04);transition:transform .12s ease-out}' +
+        // The ring is drawn inside the poster and the poster is not enlarged:
+        // scrollers clip anything outside it.
         'html.jrn-on .card[data-jrn-focus] .cardScalable::after{content:"";position:absolute;inset:0;z-index:5;pointer-events:none;' +
             'border:4px solid ' + ACCENT + ';border-radius:inherit}' +
         // The hover overlay (play, played, favourite, more) would dim the focused poster.
         'html.jrn-on:not(.jrn-mouse) .card[data-jrn-focus] .cardOverlayContainer{opacity:0 !important}' +
         'html.jrn-on .listItem[data-jrn-focus]{outline:3px solid ' + ACCENT + ' !important;outline-offset:-3px;background:rgba(0,164,220,.15)}' +
         'html.jrn-on.jrn-mouse [data-jrn-focus]{outline:none !important}' +
-        'html.jrn-on.jrn-mouse .card[data-jrn-focus] .cardBox{transform:none}' +
         'html.jrn-on.jrn-mouse .card[data-jrn-focus] .cardScalable::after{display:none}' +
         '#jrn-toggle{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;margin:0 4px;' +
             'border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer;padding:0}' +
