@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-10-16
+
+### Fixed
+- **The update dialog works with a remote.** In remote control mode the highlight now starts on Later in the dialog, Left/Right move to Update now, Enter picks and Escape means Later; before, the keys moved through the page behind the dialog. While the update downloads, keys do nothing.
+
 ## 2026-10-15.1
 
 ### Fixed
