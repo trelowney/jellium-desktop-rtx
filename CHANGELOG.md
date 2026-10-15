@@ -7,6 +7,7 @@ published from the matching section below.
 
 ### Fixed
 - **The remote button stays in the top bar after playback.** Once a video had been played, the button ended up in a hidden copy of the top bar and was gone until the app was restarted.
+- **The highlight around a poster is drawn on all four sides.** The highlighted poster was also enlarged slightly, which pushed its left edge outside the row, so the left side of the frame was cut off.
 
 ## 2026-10-15
 
