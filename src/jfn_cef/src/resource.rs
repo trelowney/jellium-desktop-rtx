@@ -32,6 +32,7 @@ static RESOURCES: &[(&str, Embedded)] = &[
     embedded!("mpv-player-base.js", "application/javascript"),
     embedded!("mpv-video-player.js", "application/javascript"),
     embedded!("native-shim.js", "application/javascript"),
+    embedded!("remote-nav.js", "application/javascript"),
     embedded!("select-menu.js", "application/javascript"),
 ];
 

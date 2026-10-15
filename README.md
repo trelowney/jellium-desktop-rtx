@@ -24,6 +24,7 @@ A personal fork of [**jellium-desktop**](https://github.com/andrewrabert/jellium
 - **NVIDIA-only guard** — refuses to enable RTX on a machine without an NVIDIA GPU, and pins the NVIDIA GPU on Optimus laptops so the filter runs on it.
 - **Hardware decoding defaults to `auto`** (upstream: software decoding); with RTX enabled the client uses `d3d11va` regardless.
 - **Save and close** button in Settings, next to the instant auto-save.
+- **Remote control mode** — a button in the top bar switches to browsing with a TV remote (arrows, Enter, Escape/Backspace): a highlight moves row by row through posters, episodes and buttons, Enter opens or plays, Escape goes back to where you were. Off by default; mouse and keyboard mode is unchanged.
 - **Reopens the way you closed it** — fullscreen if you quit in fullscreen, otherwise windowed at the last size and position (as Jellyfin Media Player did).
 - **Two Windows fixes upstream `main` still lacks** — startup no longer exits before mpv's window exists (upstream #694), and overlays such as Settings can actually be hidden again (DirectComposition device created with v3).
 - **Distinct branding** — green icon and "Jellium Desktop RTX" title, so it's obvious which build is running.

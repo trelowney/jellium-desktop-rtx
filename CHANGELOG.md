@@ -3,6 +3,14 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-10-15
+
+### Added
+- **Remote control mode.** The remote button in the top bar (next to Search) switches the app between mouse and keyboard and a TV remote that sends arrows, Enter and Escape (or Backspace). In remote mode a highlight moves row by row: Left/Right along a row of posters or buttons (the row scrolls with it), Up/Down to the row above or below, back to the item you last used there. Enter opens the highlighted item, plays an episode from a season's episode list, and opens dropdowns such as Audio and Subtitles. Escape goes back and lands on the item you came from; during playback it stops and returns to the item. The player's own keys (seek, pause) are unchanged. The choice is remembered; in mouse and keyboard mode no key behaves differently.
+
+### Fixed
+- **Choosing an item in a dropdown with Enter no longer reopens it.**
+
 ## 2026-10-12.1
 
 ### Added
