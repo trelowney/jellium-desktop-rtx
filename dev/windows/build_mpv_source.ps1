@@ -137,7 +137,10 @@ pacman -S --needed --noconfirm \
 
 Invoke-Msys2 "pacman -Dk" -Description "Checking MSYS2 package dependencies"
 
-# Backports from upstream mpv that the submodule does not have yet.
+# Backports from upstream mpv that the submodule does not have yet. They are
+# reverted again right after mpv is compiled, so the submodule is left clean
+# and the app's version string does not get a "-dirty" suffix.
+$AppliedPatches = @()
 foreach ($Patch in Get-ChildItem (Join-Path $PSScriptRoot "mpv-patches\*.patch") | Sort-Object Name) {
     git -C $MpvSourceDir apply --reverse --check --ignore-whitespace $Patch.FullName 2>$null
     if ($LASTEXITCODE -eq 0) {
@@ -149,6 +152,7 @@ foreach ($Patch in Get-ChildItem (Join-Path $PSScriptRoot "mpv-patches\*.patch")
         Write-Host "Failed to apply $($Patch.Name)" -ForegroundColor Red
         exit 1
     }
+    $AppliedPatches += $Patch
     Write-Host "Applied: $($Patch.Name)" -ForegroundColor Green
 }
 
@@ -181,6 +185,16 @@ meson setup build --default-library=shared \
 
 # Build
 Invoke-Msys2 "cd '$MsysMpvSource' && meson compile -C build" -Description "Building mpv"
+
+[array]::Reverse($AppliedPatches)
+foreach ($Patch in $AppliedPatches) {
+    git -C $MpvSourceDir apply --reverse --ignore-whitespace $Patch.FullName
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Failed to revert $($Patch.Name)" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Reverted: $($Patch.Name)"
+}
 
 # Verify the DLL was produced
 $BuiltDll = Join-Path $MesonBuildDir "libmpv-2.dll"
