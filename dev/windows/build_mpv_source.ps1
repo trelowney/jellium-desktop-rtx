@@ -102,14 +102,21 @@ function Invoke-Msys2 {
 
 # freetype <-> harfbuzz and libtiff <-> libwebp depend on each other, and
 # pacman warns about the cycle whenever it has to order both halves within one
-# transaction. Install one half of each pair on its own first; the main
-# install below brings in its dependencies, and `pacman -Dk` afterwards
-# verifies that nothing is left missing.
-Invoke-Msys2 @"
-pacman -S --needed --noconfirm --asdeps -dd \
-    $PkgPrefix-freetype \
-    $PkgPrefix-libtiff
-"@ -Description "Installing dependency-cycle packages"
+# transaction. So: first install everything freetype and libtiff depend on
+# except their cycle partners, then freetype and libtiff themselves without
+# dependency checks (all their other dependencies are now present), and let
+# the main install below bring in harfbuzz and libwebp. `pacman -Dk`
+# afterwards verifies that nothing is left missing.
+$CycleScript = @'
+set -e
+cycle="@P@-freetype @P@-libtiff"
+partners="@P@-harfbuzz @P@-libwebp"
+deps=$(for p in $cycle; do pacman -Si $p | sed -n 's/^Depends On *: *//p'; done \
+    | tr ' ' '\n' | sed 's/[<>=].*//' | grep -v -x -e '' -e 'None' $(printf -- '-e %s ' $partners) | sort -u)
+pacman -S --needed --noconfirm --asdeps $deps
+pacman -S --needed --noconfirm --asdeps -dd $cycle
+'@ -replace '@P@', $PkgPrefix
+Invoke-Msys2 $CycleScript -Description "Installing dependency-cycle packages"
 
 # Install build dependencies
 Invoke-Msys2 @"
