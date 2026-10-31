@@ -296,11 +296,9 @@ impl Platform for WindowsPlatform {
     fn menu_delivery(&self, kind: MenuKind) -> MenuDelivery<'_> {
         match kind {
             MenuKind::ContextMenu => MenuDelivery::Host(&crate::menu::WinMenuHost),
-            // Dropdowns render in the page (select-menu.js), as on X11, so they
-            // match the app's dark styling instead of looking like a Win32
-            // system menu. The composited path this replaces depended on CEF
-            // delivering popup layers through OnPaint, which never produced a
-            // visible menu here.
+            // CEF dismisses the OSR <select> popup within milliseconds of
+            // OnPopupShow, before painting it, so a composited popup never
+            // shows; the page menu sets the <select> directly
             MenuKind::Dropdown => MenuDelivery::Page,
         }
     }
