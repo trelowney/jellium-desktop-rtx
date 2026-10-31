@@ -25,7 +25,6 @@ jobs:
             runner: windows-latest
             platform: windows64
             msystem: CLANG64
-            pkg_prefix: mingw-w64-clang-x86_64
             triple: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
 
@@ -39,24 +38,9 @@ jobs:
         with:
           platform: ${{ github.workflow }}-${{ matrix.arch }}
 
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: ${{ matrix.msystem }}
-          install: >-
-            ${{ matrix.pkg_prefix }}-cc
-            ${{ matrix.pkg_prefix }}-clang
-            ${{ matrix.pkg_prefix }}-meson
-            ${{ matrix.pkg_prefix }}-pkgconf
-            ${{ matrix.pkg_prefix }}-ffmpeg
-            ${{ matrix.pkg_prefix }}-libplacebo
-            ${{ matrix.pkg_prefix }}-libass
-            ${{ matrix.pkg_prefix }}-vulkan-headers
-            ${{ matrix.pkg_prefix }}-vulkan-loader
-            ${{ matrix.pkg_prefix }}-shaderc
-            ${{ matrix.pkg_prefix }}-spirv-cross
-            ${{ matrix.pkg_prefix }}-llvm
-
+      # build_mpv_source.ps1 installs the MSYS2 packages it needs into the
+      # runner's preinstalled C:\msys64, which is also what LIBCLANG_PATH and
+      # MSYS_BIN below point at.
       - name: Build mpv from source
         shell: pwsh
         run: |
@@ -68,7 +52,7 @@ jobs:
           # bindgen (used by jfn-mpv's build.rs) dlopens libclang at
           # build time. The mingw-w64-clang-*-llvm package ships
           # libclang.dll under the msystem prefix's bin/; cmd.exe
-          # doesn't pick that up from setup-msys2, so point bindgen
+          # doesn't have it on PATH, so point bindgen
           # at it explicitly.
           LIBCLANG_PATH: C:\msys64\${{ matrix.msystem }}\bin
           MSYS_BIN: C:\msys64\${{ matrix.msystem }}\bin

@@ -1,0 +1,32 @@
+From abfc3b21c87f31308edc4b273bbb5870377f0742 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kacper=20Michaj=C5=82ow?= <kasper93@gmail.com>
+Date: Mon, 1 Jun 2026 23:22:31 +0200
+Subject: [PATCH] mp_image: don't use deprecated pl_avdovi_metadata_supported
+
+It's always true now.
+---
+ video/mp_image.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/video/mp_image.c b/video/mp_image.c
+index 0a07220d7f9f7..1ce05558070a4 100644
+--- a/video/mp_image.c
++++ b/video/mp_image.c
+@@ -1185,12 +1185,13 @@ struct mp_image *mp_image_from_av_frame(struct AVFrame *src)
+     if (sd) {
+ #ifdef PL_HAVE_LAV_DOLBY_VISION
+         const AVDOVIMetadata *metadata = (const AVDOVIMetadata *)sd->buf->data;
+-#if PL_API_VER >= 364
+-        if (pl_avdovi_metadata_supported(metadata)) {
+-#else
++#if PL_API_VER < 364
+         const AVDOVIRpuDataHeader *header = av_dovi_get_header(metadata);
+-        if (header->disable_residual_flag) {
++        if (header->disable_residual_flag)
++#elif PL_API_VER < 370
++        if (pl_avdovi_metadata_supported(metadata))
+ #endif
++        {
+             dst->dovi = dovi = av_buffer_alloc(sizeof(struct pl_dovi_metadata));
+             MP_HANDLE_OOM(dovi);
+             pl_map_avdovi_metadata(&dst->params.color, &dst->params.repr,

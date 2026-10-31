@@ -100,6 +100,17 @@ function Invoke-Msys2 {
     }
 }
 
+# freetype <-> harfbuzz and libtiff <-> libwebp depend on each other, and
+# pacman warns about the cycle whenever it has to order both halves within one
+# transaction. Install one half of each pair on its own first; the main
+# install below brings in its dependencies, and `pacman -Dk` afterwards
+# verifies that nothing is left missing.
+Invoke-Msys2 @"
+pacman -S --needed --noconfirm --asdeps -dd \
+    $PkgPrefix-freetype \
+    $PkgPrefix-libtiff
+"@ -Description "Installing dependency-cycle packages"
+
 # Install build dependencies
 Invoke-Msys2 @"
 pacman -S --needed --noconfirm \
@@ -116,6 +127,23 @@ pacman -S --needed --noconfirm \
     $PkgPrefix-llvm \
     $PkgPrefix-tools
 "@ -Description "Installing MSYS2 dependencies"
+
+Invoke-Msys2 "pacman -Dk" -Description "Checking MSYS2 package dependencies"
+
+# Backports from upstream mpv that the submodule does not have yet.
+foreach ($Patch in Get-ChildItem (Join-Path $PSScriptRoot "mpv-patches\*.patch") | Sort-Object Name) {
+    git -C $MpvSourceDir apply --reverse --check --ignore-whitespace $Patch.FullName 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Already applied: $($Patch.Name)"
+        continue
+    }
+    git -C $MpvSourceDir apply --ignore-whitespace $Patch.FullName
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Failed to apply $($Patch.Name)" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Applied: $($Patch.Name)" -ForegroundColor Green
+}
 
 # Clean previous build if forcing
 $MesonBuildDir = Join-Path $MpvSourceDir "build"

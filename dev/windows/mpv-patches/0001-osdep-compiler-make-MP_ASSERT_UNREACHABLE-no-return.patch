@@ -1,0 +1,24 @@
+From a40319a51433c1cd23903dc33d932a72366384f6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kacper=20Michaj=C5=82ow?= <kasper93@gmail.com>
+Date: Sat, 27 Jun 2026 19:25:27 +0200
+Subject: [PATCH] osdep/compiler: make MP_ASSERT_UNREACHABLE no return
+
+On some platforms assert is continuable, we don't want that, so abort()
+just after.
+---
+ osdep/compiler.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/osdep/compiler.h b/osdep/compiler.h
+index 555d3d141be7a..c2132ae88837e 100644
+--- a/osdep/compiler.h
++++ b/osdep/compiler.h
+@@ -49,7 +49,7 @@
+ #endif
+ 
+ #ifndef NDEBUG
+-#define MP_ASSERT_UNREACHABLE() assert(!"unreachable")
++#define MP_ASSERT_UNREACHABLE() (assert(!"unreachable"), abort())
+ #elif __has_builtin(__builtin_unreachable)
+ #define MP_ASSERT_UNREACHABLE() __builtin_unreachable()
+ #elif defined(_MSC_VER)
