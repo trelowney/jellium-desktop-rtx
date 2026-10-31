@@ -128,6 +128,28 @@ jobs:
           # polls — so a test tag stays invisible to everyone else's installs.
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+      - name: Build machine
+        if: always()
+        shell: pwsh
+        run: |
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $cs = Get-CimInstance Win32_ComputerSystem
+          $os = Get-CimInstance Win32_OperatingSystem
+          $disk = Get-PSDrive -Name ($env:GITHUB_WORKSPACE.Substring(0, 1))
+          $gpu = (Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }) -join ', '
+          $lines = @(
+            '### Build machine'
+            '| | |'
+            '|---|---|'
+            "| CPU | $($cpu.Name.Trim()) |"
+            "| Cores | $($cpu.NumberOfCores) physical, $($cpu.NumberOfLogicalProcessors) logical |"
+            "| RAM | $([math]::Round($cs.TotalPhysicalMemory / 1GB)) GB |"
+            "| Disk ($($disk.Name):) | $([math]::Round(($disk.Used + $disk.Free) / 1GB)) GB total, $([math]::Round($disk.Free / 1GB)) GB free |"
+            "| GPU | $gpu |"
+            "| Windows | $($os.Caption) $($os.Version) ($env:PROCESSOR_ARCHITECTURE) |"
+          )
+          $lines | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
   # Clean up after ourselves: the build creates Actions caches (CEF ~hundreds
   # of MB + MSYS2 packages) that otherwise linger against the repo cache quota.
   # Runs on a cheap Linux runner regardless of build outcome and deletes them.
