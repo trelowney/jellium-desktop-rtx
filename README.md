@@ -26,7 +26,7 @@ A personal fork of [**jellium-desktop**](https://github.com/andrewrabert/jellium
 - **Save and close** button in Settings, next to the instant auto-save.
 - **Remote control mode** — a button in the top bar switches to browsing with a TV remote (arrows, Enter, Escape/Backspace): a highlight moves row by row through posters, episodes and buttons, Enter opens or plays, Escape goes back to where you were. Off by default; mouse and keyboard mode is unchanged.
 - **Reopens the way you closed it** — fullscreen if you quit in fullscreen, otherwise windowed at the last size and position (as Jellyfin Media Player did).
-- **Two Windows fixes upstream `main` still lacks** — startup no longer exits before mpv's window exists (upstream #694), and overlays such as Settings can actually be hidden again (DirectComposition device created with v3).
+- **Three Windows fixes upstream `main` still lacks** — startup no longer exits before mpv's window exists (upstream #694), overlays such as Settings can actually be hidden again (DirectComposition device created with v3), and the keyboard (and a remote) works immediately after switching back to the app with Alt+Tab or the taskbar, without clicking into the window first.
 - **Distinct branding** — green icon and "Jellium Desktop RTX" title, so it's obvious which build is running.
 - **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-09-20 (<commit>) - base jellium-desktop 0.1.0-dev@14dc084`, so you always know the build date and which upstream commit it was made from.
 

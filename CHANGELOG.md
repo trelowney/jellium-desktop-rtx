@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-10-31
+
+### Fixed
+- **Keys work right away after switching back to the app.** Returning to the window without clicking inside it (Alt+Tab, the taskbar, the title bar, restoring from minimized, closing another window) left Space, Enter, arrows and the remote dead until you clicked into the page. Keyboard focus now goes back to the page whenever the window is activated.
+
 ## 2026-10-16
 
 ### Fixed

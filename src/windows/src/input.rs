@@ -18,30 +18,32 @@ use windows::Win32::System::SystemServices::{
     APPCOMMAND_BROWSER_BACKWARD, APPCOMMAND_BROWSER_FORWARD, MK_CONTROL, MK_LBUTTON, MK_MBUTTON,
     MK_RBUTTON, MK_SHIFT,
 };
-use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId};
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::HiDpi::{
     GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, MAPVK_VK_TO_CHAR, MapVirtualKeyW, SetFocus, VK_ADD, VK_BROWSER_BACK,
-    VK_BROWSER_FORWARD, VK_CAPITAL, VK_CLEAR, VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE,
-    VK_DOWN, VK_END, VK_F4, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN,
-    VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3,
-    VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL,
-    VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SUBTRACT, VK_UP,
+    GetFocus, GetKeyState, MAPVK_VK_TO_CHAR, MapVirtualKeyW, SetFocus, VK_ADD, VK_BROWSER_BACK,
+    VK_BROWSER_FORWARD, VK_CAPITAL, VK_CLEAR, VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN,
+    VK_END, VK_F4, VK_HOME, VK_INSERT, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU,
+    VK_MULTIPLY, VK_NEXT, VK_NUMLOCK, VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4,
+    VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7, VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL, VK_RETURN,
+    VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_SUBTRACT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GA_ROOT, GetAncestor,
-    GetClientRect, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId, HCURSOR, HICON,
-    HMENU, HTCLIENT, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO,
-    IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, KF_EXTENDED,
-    LoadCursorW, MSG, PostMessageW, PostThreadMessageW, RegisterClassExW, SET_WINDOW_POS_FLAGS,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetCursor, SetWindowPos, TranslateMessage,
-    UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APPCOMMAND, WM_CHAR, WM_KEYDOWN, WM_KEYUP,
-    WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDBLCLK,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SYSCHAR, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_CHILD, WS_VISIBLE, XBUTTON2,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EVENT_OBJECT_FOCUS,
+    EVENT_SYSTEM_FOREGROUND, GA_ROOT, GetAncestor, GetClientRect, GetForegroundWindow, GetMessageW,
+    GetWindowThreadProcessId, HCURSOR, HICON, HMENU, HTCLIENT, IDC_APPSTARTING, IDC_ARROW,
+    IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    IDC_SIZENWSE, IDC_SIZEWE, IDC_WAIT, KF_EXTENDED, LoadCursorW, MSG, OBJID_CLIENT, PostMessageW,
+    PostThreadMessageW, RegisterClassExW, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOZORDER, SetCursor, SetWindowPos, TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WM_APPCOMMAND, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
+    WM_XBUTTONUP, WNDCLASSEXW, WS_CHILD, WS_VISIBLE, XBUTTON2,
 };
 use windows::core::{PCWSTR, w};
 
@@ -468,6 +470,47 @@ unsafe extern "system" fn input_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
+/// Hands keyboard focus back to the input window when the app is re-activated.
+///
+/// Activating mpv's top-level window (Alt+Tab, the taskbar, a title-bar click,
+/// closing another window) makes `DefWindowProc` focus that top-level window
+/// itself; mpv runs with `input-vo-keyboard=no`, so every key then went
+/// nowhere until a click inside the window called `SetFocus` again. Runs on
+/// the input thread (out-of-context WinEvent), and only moves focus when it
+/// sits on the bare top-level window or nowhere, so menus and other windows
+/// keep theirs.
+unsafe extern "system" fn on_focus_event(
+    _hook: HWINEVENTHOOK,
+    event: u32,
+    hwnd: HWND,
+    id_object: i32,
+    _id_child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    let raw = STATE.lock().input_hwnd_raw;
+    if raw == 0 {
+        return;
+    }
+    let input = HWND(raw as *mut std::ffi::c_void);
+    let toplevel = unsafe { GetAncestor(input, GA_ROOT) };
+    if toplevel.is_invalid() || hwnd != toplevel {
+        return;
+    }
+    let relevant = match event {
+        EVENT_SYSTEM_FOREGROUND => true,
+        EVENT_OBJECT_FOCUS => id_object == OBJID_CLIENT.0,
+        _ => false,
+    };
+    if !relevant {
+        return;
+    }
+    let focused = unsafe { GetFocus() };
+    if focused.is_invalid() || focused == toplevel {
+        let _ = unsafe { SetFocus(Some(input)) };
+    }
+}
+
 const CLASS_NAME: PCWSTR = w!("JellyfinCefInput");
 
 pub(crate) fn jfn_input_windows_run_input_thread(mpv_hwnd: *mut std::ffi::c_void) {
@@ -545,12 +588,33 @@ pub(crate) fn jfn_input_windows_run_input_thread(mpv_hwnd: *mut std::ffi::c_void
     let _ = unsafe { AttachThreadInput(tid, mpv_tid, true) };
     let _ = unsafe { SetFocus(Some(input_hwnd)) };
 
+    let pid = unsafe { GetCurrentProcessId() };
+    let focus_hooks: Vec<HWINEVENTHOOK> = [EVENT_SYSTEM_FOREGROUND, EVENT_OBJECT_FOCUS]
+        .into_iter()
+        .map(|ev| unsafe {
+            SetWinEventHook(ev, ev, None, Some(on_focus_event), pid, 0, WINEVENT_OUTOFCONTEXT)
+        })
+        .filter(|h| {
+            if h.is_invalid() {
+                tracing::warn!(
+                    target: "platform",
+                    "SetWinEventHook failed; focus is not restored on re-activation"
+                );
+            }
+            !h.is_invalid()
+        })
+        .collect();
+
     let mut m = MSG::default();
     while unsafe { GetMessageW(&mut m, None, 0, 0).0 } > 0 {
         unsafe {
             let _ = TranslateMessage(&m);
             DispatchMessageW(&m);
         }
+    }
+
+    for h in focus_hooks {
+        let _ = unsafe { UnhookWinEvent(h) };
     }
 
     if STATE.lock().input_hwnd_raw != 0 {
