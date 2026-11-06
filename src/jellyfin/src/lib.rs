@@ -130,6 +130,24 @@ struct SubtitleProfile<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "PascalCase")]
+struct ProfileCondition<'a> {
+    condition: &'a str,
+    property: &'a str,
+    value: &'a str,
+    is_required: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct CodecProfile<'a> {
+    #[serde(rename = "Type")]
+    profile_type: ProfileType,
+    codec: &'a str,
+    conditions: Vec<ProfileCondition<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
 struct DeviceProfile<'a> {
     name: &'a str,
     max_static_bitrate: i64,
@@ -140,7 +158,7 @@ struct DeviceProfile<'a> {
     subtitle_profiles: Vec<SubtitleProfile<'a>>,
     response_profiles: EmptyList,
     container_profiles: EmptyList,
-    codec_profiles: EmptyList,
+    codec_profiles: Vec<CodecProfile<'a>>,
 }
 
 // Expand each input through `renames` and return the deduped union of raw +
@@ -179,12 +197,19 @@ fn preferred_csv(preferred: &[&str], available: &[String]) -> String {
 }
 
 /// Build the DeviceProfile JSON.
+///
+/// `transcode_bare_dolby_vision` makes the server transcode Dolby Vision video
+/// that has no fallback layer (profile 5, reported by the server as the
+/// `VideoRangeType` `DOVI`). Profiles 7 and 8 report their own range types and
+/// stay direct play. Use it on a video path that can't apply the Dolby Vision
+/// reshaping, where such a file would otherwise show green or purple.
 pub fn build_device_profile(
     decoders: &[Codec],
     demuxers: &[String],
     device_name: &str,
     _app_version: &str,
     force_transcode: bool,
+    transcode_bare_dolby_vision: bool,
 ) -> String {
     let mut video_codecs: Vec<String> = Vec::new();
     let mut audio_codecs: Vec<String> = Vec::new();
@@ -302,6 +327,21 @@ pub fn build_device_profile(
         max_audio_channels: None,
     });
 
+    // Under force_transcode nothing is direct played, so there's nothing to rule out.
+    let mut codec_profiles = Vec::new();
+    if transcode_bare_dolby_vision && !force_transcode {
+        codec_profiles.push(CodecProfile {
+            profile_type: ProfileType::Video,
+            codec: "hevc",
+            conditions: vec![ProfileCondition {
+                condition: "NotEquals",
+                property: "VideoRangeType",
+                value: "DOVI",
+                is_required: false,
+            }],
+        });
+    }
+
     let profile = DeviceProfile {
         name: device_name,
         max_static_bitrate: MAX_STATIC_BITRATE,
@@ -312,7 +352,7 @@ pub fn build_device_profile(
         subtitle_profiles: sub_profiles,
         response_profiles: EMPTY_LIST,
         container_profiles: EMPTY_LIST,
-        codec_profiles: EMPTY_LIST,
+        codec_profiles,
     };
     serde_json::to_string(&profile).unwrap_or_default()
 }
@@ -426,7 +466,7 @@ mod tests {
 
     #[test]
     fn empty_capabilities_emits_photo_only_direct_play() -> TestResult {
-        let s = build_device_profile(&[], &[], "dev", "1.0", false);
+        let s = build_device_profile(&[], &[], "dev", "1.0", false, false);
         let v = parse(&s)?;
         let dp = v["DirectPlayProfiles"].as_array().ok_or("expected array")?;
         assert_eq!(dp.len(), 1);
@@ -440,7 +480,7 @@ mod tests {
             codec("h264", MediaKind::Video),
             codec("aac", MediaKind::Audio),
         ];
-        let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", true);
+        let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", true, false);
         let v = parse(&s)?;
         let dp = v["DirectPlayProfiles"].as_array().ok_or("expected array")?;
         let video = dp
@@ -467,7 +507,7 @@ mod tests {
     fn container_rename_expands_and_dedupes() -> TestResult {
         // Container CSV is only emitted when there are video/audio decoders.
         let decoders = vec![codec("h264", MediaKind::Video)];
-        let s = build_device_profile(&decoders, &["matroska,webm".into()], "dev", "1.0", false);
+        let s = build_device_profile(&decoders, &["matroska,webm".into()], "dev", "1.0", false, false);
         let v = parse(&s)?;
         let dp = v["DirectPlayProfiles"].as_array().ok_or("expected array")?;
         let video = dp
@@ -490,7 +530,7 @@ mod tests {
     #[test]
     fn subtitle_rename_emits_both_methods() -> TestResult {
         let decoders = vec![codec("subrip", MediaKind::Subtitle)];
-        let s = build_device_profile(&decoders, &[], "dev", "1.0", false);
+        let s = build_device_profile(&decoders, &[], "dev", "1.0", false, false);
         let v = parse(&s)?;
         let sp = v["SubtitleProfiles"].as_array().ok_or("expected array")?;
         let formats: Vec<&str> = sp
@@ -523,7 +563,7 @@ mod tests {
             codec("hevc", MediaKind::Video),
             codec("h264", MediaKind::Video),
         ];
-        let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", false);
+        let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", false, false);
         let v = parse(&s)?;
         let tp = v["TranscodingProfiles"]
             .as_array()
@@ -542,7 +582,7 @@ mod tests {
             codec("aac", MediaKind::Audio),
             codec("opus", MediaKind::Audio),
         ];
-        let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", false);
+        let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", false, false);
         let v = parse(&s)?;
         let tp = v["TranscodingProfiles"]
             .as_array()
@@ -837,7 +877,7 @@ mod tests {
     #[test]
     fn empty_capabilities_profile_is_byte_exact() {
         assert_eq!(
-            build_device_profile(&[], &[], "dev", "1.0", false),
+            build_device_profile(&[], &[], "dev", "1.0", false, false),
             EMPTY_PROFILE_JSON
         );
     }
@@ -846,7 +886,7 @@ mod tests {
     fn typical_capabilities_profile_is_byte_exact() {
         let demuxers = vec!["matroska,webm".to_string(), "mpegts".to_string()];
         assert_eq!(
-            build_device_profile(&byte_exact_decoders(), &demuxers, "dev", "1.0", false),
+            build_device_profile(&byte_exact_decoders(), &demuxers, "dev", "1.0", false, false),
             TYPICAL_PROFILE_JSON
         );
     }
@@ -855,9 +895,34 @@ mod tests {
     fn forced_transcode_profile_is_byte_exact() {
         let demuxers = vec!["matroska".to_string()];
         assert_eq!(
-            build_device_profile(&byte_exact_decoders(), &demuxers, "dev", "1.0", true),
+            build_device_profile(&byte_exact_decoders(), &demuxers, "dev", "1.0", true, false),
             FORCED_TRANSCODE_PROFILE_JSON
         );
+    }
+
+    #[test]
+    fn bare_dolby_vision_is_ruled_out_of_direct_play_on_request() -> TestResult {
+        let s = build_device_profile(&byte_exact_decoders(), &[], "dev", "1.0", false, true);
+        let v = parse(&s)?;
+        let cp = v["CodecProfiles"].as_array().ok_or("expected array")?;
+        assert_eq!(cp.len(), 1);
+        assert_eq!(cp[0]["Type"], "Video");
+        assert_eq!(cp[0]["Codec"], "hevc");
+        let conditions = cp[0]["Conditions"].as_array().ok_or("expected array")?;
+        assert_eq!(conditions.len(), 1);
+        assert_eq!(conditions[0]["Condition"], "NotEquals");
+        assert_eq!(conditions[0]["Property"], "VideoRangeType");
+        assert_eq!(conditions[0]["Value"], "DOVI");
+        assert_eq!(conditions[0]["IsRequired"], false);
+        Ok(())
+    }
+
+    #[test]
+    fn force_transcode_ignores_the_dolby_vision_condition() -> TestResult {
+        let s = build_device_profile(&byte_exact_decoders(), &[], "dev", "1.0", true, true);
+        let v = parse(&s)?;
+        assert_eq!(v["CodecProfiles"], serde_json::json!([]));
+        Ok(())
     }
 
     #[test]

@@ -350,6 +350,9 @@ fn publish_device_profile(mpv_raw: *mut jfn_mpv::sys::mpv_handle) {
         "Jellium Desktop",
         APP_VERSION_FULL,
         force,
+        // The Windows video path loses the Dolby Vision metadata, so profile 5
+        // (no HDR10 base layer) would show green or purple.
+        cfg!(target_os = "windows"),
     );
     tracing::info!(target: "Main", "Device profile: {profile}");
     unsafe {

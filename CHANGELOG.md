@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-11-07
+
+### Fixed
+- **Dolby Vision profile 5 no longer plays green or purple on Windows.** These files have no HDR10 base layer, and the client can't apply the Dolby Vision color data itself. The server now transcodes them, with the correct colors. This picture is SDR. Other Dolby Vision files (profiles 7 and 8) still play directly, unchanged.
+
 ## 2026-10-31
 
 ### Fixed
