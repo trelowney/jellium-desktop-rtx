@@ -71,6 +71,7 @@ pub(crate) fn apply_setting_value(_section: &str, key: &str, value: Option<&str>
         "audioChannels" => jfn_config::set_audio_channels(value),
         "transparentTitlebar" => jfn_config::set_transparent_titlebar(value == "true"),
         "hideScrollbar" => jfn_config::set_hide_scrollbar(value == "true"),
+        "hwDirectPlayOnly" => jfn_config::set_hw_direct_play_only(value == "true"),
         "logLevel" => jfn_config::set_log_level(value),
         "forceTranscoding" => jfn_config::set_force_transcoding(value == "true"),
         "deviceName" => {

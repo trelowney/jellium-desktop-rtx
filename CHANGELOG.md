@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-11-07.1
+
+### Added
+- **Direct play only video your GPU decodes in hardware** (Settings → Transcode, on by default). The app asks Direct3D 11 whether the GPU can decode 4K HEVC, VP9 and AV1, and lets the server convert what it can't, instead of decoding it on the CPU. If the GPU gives no answer, nothing changes.
+
 ## 2026-11-07
 
 ### Fixed

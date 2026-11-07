@@ -103,7 +103,8 @@
                 audioChannels: _savedSettings.audioChannels || ''
             },
             transcode: {
-                forceTranscoding: !!_savedSettings.forceTranscoding
+                forceTranscoding: !!_savedSettings.forceTranscoding,
+                hwDirectPlayOnly: _savedSettings.hwDirectPlayOnly !== false
             },
             advanced: {
                 transparentTitlebar: _savedSettings.transparentTitlebar !== false,
@@ -159,6 +160,11 @@
     // Windows + NVIDIA RTX only: AI video enhancement via mpv's d3d11vpp filter.
     // Hidden elsewhere because the filter only exists on the Windows mpv build.
     if (navigator.platform.startsWith('Win')) {
+        jmpInfo.settingsDescriptions.transcode.push({
+            key: 'hwDirectPlayOnly',
+            displayName: 'Direct Play Only Hardware-Decodable Video',
+            help: "Ask the server to convert HEVC, VP9 and AV1 video when this GPU can't decode it in hardware at 4K, instead of decoding it on the CPU. Set to off to always play these directly."
+        });
         jmpInfo.settingsDescriptions.playback.push(
             {
                 key: 'rtxVsr',

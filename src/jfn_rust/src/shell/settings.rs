@@ -18,6 +18,7 @@ pub const AUDIO_PASSTHROUGH_FIELD: Id = Id::new("shell-settings-audio-passthroug
 pub const EXCLUSIVE_AUDIO_CONTROL: Id = Id::new("shell-settings-exclusive-audio");
 pub const CHANNEL_LAYOUT_CONTROL: Id = Id::new("shell-settings-channel-layout");
 pub const FORCE_TRANSCODE_CONTROL: Id = Id::new("shell-settings-force-transcode");
+pub const HW_DIRECT_PLAY_CONTROL: Id = Id::new("shell-settings-hw-direct-play");
 pub const WINDOW_DECORATION_CONTROL: Id = Id::new("shell-settings-window-decoration");
 pub const TRANSPARENT_TITLEBAR_CONTROL: Id = Id::new("shell-settings-transparent-titlebar");
 pub const HIDE_SCROLLBAR_CONTROL: Id = Id::new("shell-settings-hide-scrollbar");
@@ -52,6 +53,7 @@ pub enum Message {
     ExclusiveAudioOutputChanged(bool),
     AudioChannelLayoutChanged(String),
     ForceTranscodingChanged(bool),
+    HwDirectPlayOnlyChanged(bool),
     WindowDecorationsChanged(Option<WindowDecorations>),
     TransparentTitlebarChanged(bool),
     HideScrollbarChanged(bool),
@@ -156,6 +158,28 @@ impl Settings {
                 ));
         }
 
+        let mut transcode = column![self.toggle(
+            FORCE_TRANSCODE_CONTROL,
+            "Force Transcoding",
+            jfn_config::force_transcoding(),
+            Message::ForceTranscodingChanged,
+            "Always request a transcoded stream from the server, even when direct play would work.",
+        )]
+        .spacing(16);
+        // Windows only: Direct3D 11 can say which codecs this GPU decodes in
+        // hardware; the rest are left to the server to convert.
+        if jfn_platform_abi::try_lease()
+            .is_some_and(|lease| hw_direct_play_visible(lease.platform().display()))
+        {
+            transcode = transcode.push(self.toggle(
+                HW_DIRECT_PLAY_CONTROL,
+                "Direct Play Only Hardware-Decodable Video",
+                jfn_config::hw_direct_play_only(),
+                Message::HwDirectPlayOnlyChanged,
+                "Ask the server to convert HEVC, VP9 and AV1 video when this GPU can't decode it in hardware at 4K, instead of decoding it on the CPU. Set to off to always play these directly.",
+            ));
+        }
+
         let mut controls = column![
             text("Changes take effect after restarting the application.").class(Some(theme::MUTED)),
             self.group(SECTION_TITLES[0], playback),
@@ -189,13 +213,7 @@ impl Settings {
                     "Force a specific channel layout. Leave empty for auto-detection.",
                 ),
             ]),
-            self.group(SECTION_TITLES[2], column![self.toggle(
-                FORCE_TRANSCODE_CONTROL,
-                "Force Transcoding",
-                jfn_config::force_transcoding(),
-                Message::ForceTranscodingChanged,
-                "Always request a transcoded stream from the server, even when direct play would work.",
-            )]),
+            self.group(SECTION_TITLES[2], transcode),
         ]
         .spacing(22);
 
@@ -339,6 +357,7 @@ impl Settings {
             Message::ExclusiveAudioOutputChanged(value) => jfn_config::set_audio_exclusive(value),
             Message::AudioChannelLayoutChanged(value) => jfn_config::set_audio_channels(&value),
             Message::ForceTranscodingChanged(value) => jfn_config::set_force_transcoding(value),
+            Message::HwDirectPlayOnlyChanged(value) => jfn_config::set_hw_direct_play_only(value),
             Message::WindowDecorationsChanged(value) => {
                 jfn_config::set_window_decorations(value.map(WindowDecorations::as_str));
             }
@@ -479,6 +498,10 @@ fn rtx_visible(display: DisplayBackend) -> bool {
     display == DisplayBackend::Windows
 }
 
+fn hw_direct_play_visible(display: DisplayBackend) -> bool {
+    display == DisplayBackend::Windows
+}
+
 /// The forward-buffer sizes offered, in MiB; bounded by
 /// `jfn_config::CACHE_SIZE_MB_MIN..=CACHE_SIZE_MB_MAX`.
 const BUFFER_SIZE_CHOICES_MB: [i32; 8] = [32, 64, 128, 256, 512, 1024, 2048, 4096];
@@ -508,6 +531,9 @@ fn control_order(display: DisplayBackend, decorations: bool, server: bool) -> Ve
         CHANNEL_LAYOUT_CONTROL,
         FORCE_TRANSCODE_CONTROL,
     ]);
+    if hw_direct_play_visible(display) {
+        ids.push(HW_DIRECT_PLAY_CONTROL);
+    }
     if decorations {
         ids.push(WINDOW_DECORATION_CONTROL);
     }
@@ -647,6 +673,17 @@ mod tests {
         assert_eq!(buffer_size_label(256), "256 MB (default)");
         assert_eq!(buffer_size_label(1024), "1 GB");
         assert_eq!(buffer_size_label(4096), "4 GB");
+    }
+
+    #[test]
+    fn hw_direct_play_is_windows_only_and_follows_force_transcoding() {
+        assert!(hw_direct_play_visible(DisplayBackend::Windows));
+        assert!(!hw_direct_play_visible(DisplayBackend::MacOS));
+        assert!(!hw_direct_play_visible(DisplayBackend::Wayland));
+        let ids = control_order(DisplayBackend::Windows, false, false);
+        let force = ids.iter().position(|id| *id == FORCE_TRANSCODE_CONTROL);
+        let hw = ids.iter().position(|id| *id == HW_DIRECT_PLAY_CONTROL);
+        assert_eq!(hw, force.map(|i| i + 1));
     }
 
     #[test]

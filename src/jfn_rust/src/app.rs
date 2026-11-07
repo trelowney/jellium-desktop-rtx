@@ -331,7 +331,8 @@ fn wait_for_vo_window(mut boot: BackgroundCapture) -> Result<ReadyBoot, BootErro
 
 fn publish_device_profile(mpv_raw: *mut jfn_mpv::sys::mpv_handle) {
     let caps = unsafe { jfn_mpv::capabilities::query_raw(mpv_raw) };
-    let decoders: Vec<jfn_jellyfin::Codec> = caps
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut decoders: Vec<jfn_jellyfin::Codec> = caps
         .decoders
         .into_iter()
         .map(|c| jfn_jellyfin::Codec {
@@ -343,6 +344,22 @@ fn publish_device_profile(mpv_raw: *mut jfn_mpv::sys::mpv_handle) {
             },
         })
         .collect();
+    #[cfg(target_os = "windows")]
+    if jfn_config::hw_direct_play_only() {
+        // With RTX on, mpv decodes on the NVIDIA GPU; otherwise on the default one.
+        let prefer_nvidia = jfn_config::rtx_vsr() || jfn_config::rtx_hdr();
+        // No answer from the GPU: keep every codec, as without this setting.
+        if let Some(hw) = jfn_mpv::hw_decode::probe(prefer_nvidia) {
+            let dropped =
+                jfn_jellyfin::retain_hw_decodable_video(&mut decoders, |c| hw.supports(c));
+            tracing::info!(
+                target: "Main",
+                "Direct play limited to what {} decodes in hardware; left to the server: {}",
+                hw.adapter,
+                if dropped.is_empty() { "none".to_string() } else { dropped.join(",") }
+            );
+        }
+    }
     let force = jfn_config::force_transcoding();
     let profile = jfn_jellyfin::build_device_profile(
         &decoders,

@@ -77,6 +77,7 @@ struct SettingsData {
     force_transcoding: bool,
     window_decorations: Option<WindowDecorations>,
     hide_scrollbar: bool,
+    hw_direct_play_only: bool,
     rtx_vsr: bool,
     rtx_hdr: bool,
     cache_size_mb: i32,
@@ -99,6 +100,7 @@ impl Default for SettingsData {
             force_transcoding: false,
             window_decorations: None,
             hide_scrollbar: true,
+            hw_direct_play_only: true,
             rtx_vsr: false,
             rtx_hdr: false,
             cache_size_mb: CACHE_SIZE_MB_DEFAULT,
@@ -171,6 +173,9 @@ struct SettingsFile {
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     hide_scrollbar: Option<bool>,
+
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    hw_direct_play_only: Option<bool>,
 
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     rtx_vsr: Option<bool>,
@@ -250,6 +255,8 @@ struct CliSettings<'a> {
 
     hide_scrollbar: bool,
 
+    hw_direct_play_only: bool,
+
     rtx_vsr: bool,
 
     rtx_hdr: bool,
@@ -327,6 +334,9 @@ impl SettingsData {
         if let Some(v) = file.hide_scrollbar {
             self.hide_scrollbar = v;
         }
+        if let Some(v) = file.hw_direct_play_only {
+            self.hw_direct_play_only = v;
+        }
         if let Some(v) = file.rtx_vsr {
             self.rtx_vsr = v;
         }
@@ -363,6 +373,7 @@ impl SettingsData {
             force_transcoding: self.force_transcoding.then_some(true),
             window_decorations: self.window_decorations,
             hide_scrollbar: (!self.hide_scrollbar).then_some(false),
+            hw_direct_play_only: (!self.hw_direct_play_only).then_some(false),
             rtx_vsr: self.rtx_vsr.then_some(true),
             rtx_hdr: self.rtx_hdr.then_some(true),
             cache_size: (self.cache_size_mb != CACHE_SIZE_MB_DEFAULT).then_some(self.cache_size_mb),
@@ -383,6 +394,7 @@ impl SettingsData {
             log_level: (!self.log_level.is_empty()).then_some(self.log_level.as_str()),
             force_transcoding: self.force_transcoding,
             hide_scrollbar: self.hide_scrollbar,
+            hw_direct_play_only: self.hw_direct_play_only,
             rtx_vsr: self.rtx_vsr,
             rtx_hdr: self.rtx_hdr,
             cache_size: self.cache_size_mb,
@@ -659,6 +671,11 @@ pub fn titlebar_theme_color() -> bool {
     window_decorations_mode() == WindowDecorations::ServerThemed
 }
 bool_accessors!(hide_scrollbar, set_hide_scrollbar, hide_scrollbar);
+bool_accessors!(
+    hw_direct_play_only,
+    set_hw_direct_play_only,
+    hw_direct_play_only
+);
 bool_accessors!(rtx_vsr, set_rtx_vsr, rtx_vsr);
 bool_accessors!(rtx_hdr, set_rtx_hdr, rtx_hdr);
 
@@ -791,6 +808,7 @@ mod tests {
             force_transcoding: true,
             window_decorations: Some(WindowDecorations::ServerThemed),
             hide_scrollbar: false,
+            hw_direct_play_only: false,
             rtx_vsr: true,
             rtx_hdr: true,
             cache_size_mb: 512,
@@ -818,6 +836,7 @@ mod tests {
                 "forceTranscoding",
                 "windowDecorations",
                 "hideScrollbar",
+                "hwDirectPlayOnly",
                 "rtxVsr",
                 "rtxHdr",
                 "cacheSize",
@@ -833,6 +852,7 @@ mod tests {
         assert_eq!(data.server_url, "http://host");
         assert!(data.transparent_titlebar);
         assert!(data.hide_scrollbar);
+        assert!(data.hw_direct_play_only);
         assert_eq!(data.window.x, -1);
     }
 
@@ -892,6 +912,7 @@ mod tests {
                 "transparentTitlebar",
                 "forceTranscoding",
                 "hideScrollbar",
+                "hwDirectPlayOnly",
                 "rtxVsr",
                 "rtxHdr",
                 "cacheSize",

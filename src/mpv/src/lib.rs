@@ -24,6 +24,8 @@ pub mod api;
 pub mod boot;
 pub mod capabilities;
 pub mod color;
+#[cfg(target_os = "windows")]
+pub mod hw_decode;
 pub mod probe;
 
 pub use command::Command;

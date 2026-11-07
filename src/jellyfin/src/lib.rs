@@ -185,6 +185,30 @@ fn expand_with_renames(inputs: &[String], renames: &[(&'static str, &'static str
     out
 }
 
+/// Video codecs that are costly to decode in software. With "direct play
+/// only hardware-decodable video" on, these stay in the profile only when the
+/// machine has a hardware decoder for them; everything older is cheap enough
+/// on the CPU and is kept as is.
+pub const HW_GATED_VIDEO_CODECS: &[&str] = &["hevc", "vp9", "av1"];
+
+/// Drop the gated video codecs `hw_decodable` rejects, so the server neither
+/// direct-plays nor transcodes to them. Returns the names that were dropped.
+pub fn retain_hw_decodable_video(
+    decoders: &mut Vec<Codec>,
+    hw_decodable: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let mut dropped = Vec::new();
+    decoders.retain(|c| {
+        let gated = c.kind == MediaKind::Video && HW_GATED_VIDEO_CODECS.contains(&c.name.as_str());
+        if gated && !hw_decodable(&c.name) {
+            dropped.push(c.name.clone());
+            return false;
+        }
+        true
+    });
+    dropped
+}
+
 // Intersect `preferred` with `available`, keeping `preferred`'s order — the
 // server takes the first entry as its output codec — joined as CSV.
 fn preferred_csv(preferred: &[&str], available: &[String]) -> String {
@@ -898,6 +922,35 @@ mod tests {
             build_device_profile(&byte_exact_decoders(), &demuxers, "dev", "1.0", true, false),
             FORCED_TRANSCODE_PROFILE_JSON
         );
+    }
+
+    #[test]
+    fn retain_hw_decodable_video_drops_only_gated_codecs_without_hardware() {
+        let codec = |name: &str, kind| Codec {
+            name: name.into(),
+            kind,
+        };
+        let mut decoders = vec![
+            codec("h264", MediaKind::Video),
+            codec("hevc", MediaKind::Video),
+            codec("vp9", MediaKind::Video),
+            codec("av1", MediaKind::Video),
+            codec("mpeg2video", MediaKind::Video),
+            codec("aac", MediaKind::Audio),
+        ];
+        let dropped = retain_hw_decodable_video(&mut decoders, |c| c == "hevc");
+        assert_eq!(dropped, ["vp9", "av1"]);
+        let names: Vec<&str> = decoders.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["h264", "hevc", "mpeg2video", "aac"]);
+
+        let s = build_device_profile(&decoders, &["matroska".into()], "dev", "1.0", false, false);
+        let v: serde_json::Value = serde_json::from_str(&s).expect("valid json");
+        let video = &v["DirectPlayProfiles"][0];
+        assert_eq!(video["VideoCodec"], "h264,hevc,mpeg2video");
+        let targets = v["TranscodingProfiles"][1]["VideoCodec"]
+            .as_str()
+            .expect("csv");
+        assert_eq!(targets, "h264,hevc");
     }
 
     #[test]
