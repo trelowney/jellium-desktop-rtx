@@ -3,6 +3,15 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-11-13
+
+### Added
+- **Jellyfin Enhanced subtitle style applies in the player.** If the server has the Jellyfin Enhanced plugin, the subtitle style each user picks there (text color, background, size, font, text effect, vertical position) is now drawn by the player too. Before, it only affected jellyfin-web's own player and the app kept mpv's look. Changes made in the plugin's panel show up within a second, even during playback. Without the plugin, or with its custom subtitle styles turned off, subtitles look exactly as before, including anything set in your own `mpv.conf`. Only plain-text subtitles (SRT, WebVTT, ...) are styled, as in jellyfin-web; ASS and image subtitles keep their own look.
+- **Jellyfin Enhanced pause screen works in the app.** With the plugin's pause screen turned on, pausing for a few seconds shows the item's backdrop, logo, plot and progress. A click on the screen, Space or Enter resumes the video, the same as in the browser. Without the plugin, or with the pause screen turned off in it, pausing works as before.
+
+### Changed
+- **Based on the latest upstream jellium-desktop (`96bae1c`), with Chromium Embedded Framework 156** (was 151).
+
 ## 2026-11-07.1
 
 ### Added

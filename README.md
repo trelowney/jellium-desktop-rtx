@@ -18,6 +18,7 @@ A personal fork of [**jellium-desktop**](https://github.com/andrewrabert/jellium
 - **Separate data directory** — stores settings/cache/logs under `jellium-desktop-rtx`, so it won't clash with an installed stock jellyfin-desktop. On first run it **migrates settings from the stock install** (if present), so you don't have to log in / reconfigure.
 - **Buffer size is configurable** — Settings → Playback lets you pick how much of the stream to buffer ahead (32 MB – 4 GB, default 256 MB), the setting Jellyfin Media Player had and upstream dropped.
 - **Playback Info shows the buffer live** — how much is buffered of the configured limit, how much playback time that covers, the current fill rate, and what the buffer is doing (filling / full / underrun).
+- **Jellyfin Enhanced in the player** — if the server runs the Jellyfin Enhanced plugin, its subtitle style (color, background, size, font, effect, position) and its pause screen work in the app too, not only in the browser; without the plugin nothing changes.
 - **Logo in the player** — the video OSD shows the series' (or movie's) clear logo under the title line, using the logo Jellyfin already fetched for the item.
 - **Self-updating** — checks GitHub for a newer release shortly after start (and on About → **Check for updates**) and installs it in place; test builds (pre-releases) are never offered.
 - **Hard Reload / Clear Cache and Reload** in the right-click menu — for when a plain *Reload* keeps showing a stale `index.html` (the server answers `304` and Chromium keeps its cached copy, e.g. after installing a server plugin that injects into the page).
@@ -30,7 +31,7 @@ A personal fork of [**jellium-desktop**](https://github.com/andrewrabert/jellium
 - **Reopens the way you closed it** — fullscreen if you quit in fullscreen, otherwise windowed at the last size and position (as Jellyfin Media Player did).
 - **Three Windows fixes upstream `main` still lacks** — startup no longer exits before mpv's window exists (upstream #694), overlays such as Settings can actually be hidden again (DirectComposition device created with v3), and the keyboard (and a remote) works immediately after switching back to the app with Alt+Tab or the taskbar, without clicking into the window first.
 - **Distinct branding** — green icon and "Jellium Desktop RTX" title, so it's obvious which build is running.
-- **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-09-20 (<commit>) - base jellium-desktop 0.1.0-dev@14dc084`, so you always know the build date and which upstream commit it was made from.
+- **Version shows its origin** — the in-app version reads e.g. `RTX build 2026-09-20 (<commit>) - base jellium-desktop 0.1.0-dev@96bae1c`, so you always know the build date and which upstream commit it was made from.
 
 ## Requirements
 
