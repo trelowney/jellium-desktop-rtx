@@ -11,6 +11,7 @@
 use parking_lot::Mutex;
 use std::ffi::{c_int, c_void};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
@@ -22,8 +23,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use jfn_mpv::api::{
-    jfn_mpv_get_property_int, jfn_mpv_set_fullscreen, jfn_mpv_set_window_maximized,
-    jfn_mpv_set_window_minimized, jfn_mpv_toggle_fullscreen,
+    jfn_mpv_set_fullscreen, jfn_mpv_set_window_maximized, jfn_mpv_set_window_minimized,
+    jfn_mpv_toggle_fullscreen,
 };
 use jfn_mpv::boot::jfn_mpv_handle_get;
 use jfn_platform_abi::geometry::{Bounds, WindowGeometry, clamp_to_bounds};
@@ -78,16 +79,7 @@ pub(crate) fn win_ensure_hwnd() -> Option<HWND> {
     if let Some(hwnd) = win_hwnd() {
         return Some(hwnd);
     }
-    let raw = if let Some(id) = jfn_playback::ingest_driver::jfn_playback_window_id() {
-        id as usize
-    } else {
-        let mut wid: i64 = 0;
-        let rc = unsafe { jfn_mpv_get_property_int(c"window-id".as_ptr(), &mut wid) };
-        if rc < 0 || wid == 0 {
-            return None;
-        }
-        wid as usize
-    };
+    let raw = jfn_playback::ingest_driver::jfn_playback_window_id()? as usize;
     if raw == 0 {
         return None;
     }
@@ -207,19 +199,59 @@ unsafe extern "system" fn mpv_wndproc_hook(n_code: c_int, wp: WPARAM, lp: LPARAM
 
 pub(crate) fn win_early_init() {}
 
-pub(crate) fn win_init(_mpv: *mut c_void) -> Result<(), jfn_platform_abi::PlatformInitError> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let hwnd = loop {
+/// Poll interval for [`wait_for_hwnd`]'s bounded retry.
+const HWND_POLL_INTERVAL: Duration = Duration::from_millis(15);
+
+/// Blocks up to 5s for mpv to create its window and publish its window-id,
+/// by retrying a sync libmpv property read — safe here specifically because
+/// this runs as ordinary sequential boot code, not from inside an mpv event
+/// callback (the deadlock risk the sync-API rule in AGENTS.md is about is
+/// reentrancy from a callback, which this isn't).
+///
+/// Deliberately never touches `jfn_mpv::api::wait_event_owned`/mpv's shared
+/// event queue, unlike an earlier version of this function: mpv's event
+/// queue is a single destructive-read FIFO, and the boot-critical captured-
+/// background-color handshake (`BACKGROUND_COLOR_REPLY` /
+/// `STARTUP_BACKGROUND_SET_REPLY` in `app.rs`'s `consume_boot_event`) can
+/// land on it at any point during boot. Forwarding events pulled here to
+/// generic ingest — as the earlier version did — would silently swallow
+/// either of those two instead of `wait_for_vo_window` seeing them, which
+/// leaves `BackgroundCapture` stuck below `Applied` forever: `boot_progress`
+/// requires it before anything else, so the whole boot hangs permanently,
+/// not merely falls back to a default background color. A short sleep-poll
+/// is the one safe option against a shared, destructively-read queue.
+fn wait_for_hwnd() -> Option<HWND> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let Ok(window_id_prop) = std::ffi::CString::new("window-id") else {
+        return None;
+    };
+    loop {
         if let Some(hwnd) = win_ensure_hwnd() {
-            break hwnd;
+            return Some(hwnd);
         }
-        if std::time::Instant::now() >= deadline {
+        let mut raw: i64 = 0;
+        let rc =
+            unsafe { jfn_mpv::api::jfn_mpv_get_property_int(window_id_prop.as_ptr(), &mut raw) };
+        if rc == 0 && raw != 0 {
+            STATE.lock().mpv_hwnd_raw = raw as usize;
+            return Some(hwnd_from_raw(raw as usize));
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(HWND_POLL_INTERVAL);
+    }
+}
+
+pub(crate) fn win_init(_mpv: *mut c_void) -> Result<(), jfn_platform_abi::PlatformInitError> {
+    let hwnd = match win_ensure_hwnd().or_else(wait_for_hwnd) {
+        Some(hwnd) => hwnd,
+        None => {
             return Err(jfn_platform_abi::PlatformInitError::backend(
                 "Windows window acquisition",
                 "no observed mpv window-id",
             ));
         }
-        std::thread::sleep(std::time::Duration::from_millis(10));
     };
     let hwnd_raw = hwnd.0 as usize;
     crate::window::republish();
