@@ -203,6 +203,52 @@ fn handle_player_load(args: &ListValue) {
     unsafe { jfn_mpv_load_file(url_c.as_ptr(), &opts) };
 }
 
+/// Subtitle style from the Jellyfin Enhanced plugin as a JSON object, or
+/// `null` to go back to the user's own mpv subtitle style.
+fn handle_subtitle_style(json: &str) {
+    use jfn_mpv::sub_style::{SubtitleStyle, TextEffect, apply, clear};
+
+    let style = match serde_json::from_str::<Value>(json) {
+        Ok(Value::Object(o)) => {
+            let text = |k: &str| {
+                o.get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned()
+            };
+            SubtitleStyle {
+                text_color: text("textColor"),
+                back_color: text("backColor"),
+                size_factor: o
+                    .get("sizeFactor")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(f64::NAN),
+                font_family: text("fontFamily"),
+                effect: TextEffect::from_name(&text("effect")),
+                vertical_position: o.get("verticalPosition").and_then(Value::as_f64),
+            }
+        }
+        Ok(Value::Null) => {
+            clear();
+            return;
+        }
+        _ => {
+            jfn_logging::log(
+                jfn_logging::Category::Cef,
+                jfn_logging::Level::Warn,
+                "playerSetSubtitleStyle: ignoring malformed style",
+            );
+            return;
+        }
+    };
+    jfn_logging::log(
+        jfn_logging::Category::Cef,
+        jfn_logging::Level::Info,
+        &format!("playerSetSubtitleStyle: {style:?}"),
+    );
+    apply(&style);
+}
+
 /// Run `f` if the IPC arrived with an args list. Always returns `true` —
 /// every arm using this is considered "handled" even when args are
 /// missing, matching the prior behaviour.
@@ -290,6 +336,9 @@ fn handle_message(message: BrowserMessage) -> bool {
         "playerSetSubtitleDelay" => {
             with_args(args, |a| jfn_mpv_set_subtitle_delay(list_double(a, 0)))
         }
+        "playerSetSubtitleStyle" => with_args(args, |a| {
+            handle_subtitle_style(&list_string(a, 0));
+        }),
         "playerSetAspectMode" => with_args(args, |a| {
             let mode = list_string(a, 0);
             if let Some(c) = js_cstr_or_warn("playerSetAspectMode", &mode) {

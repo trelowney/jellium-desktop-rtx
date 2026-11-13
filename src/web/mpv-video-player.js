@@ -288,6 +288,95 @@
         header.classList.add(OSD_LOGO_HEADER_CLASS);
     }
 
+    // ---- Jellyfin Enhanced bridge -----------------------------------------
+    // The Jellyfin Enhanced server plugin styles subtitles and shows a pause
+    // screen, both written for jellyfin-web's own <video> player. Here mpv
+    // plays the video, so the subtitle style is forwarded to mpv and the pause
+    // screen gets a hidden stand-in <video> that mirrors mpv's state. Without
+    // the plugin (or with the feature off in it) neither does anything, and
+    // mpv keeps the user's own subtitle style.
+    const ENHANCED_SYNC_INTERVAL_MS = 1000;
+    const TEXT_SUBTITLE_CODECS = new Set([
+        'srt', 'subrip', 'vtt', 'webvtt', 'mov_text', 'text', 'ttml', 'smi', 'sami',
+        'microdvd', 'mpl2', 'subviewer', 'jacosub', 'pjs', 'realtext', 'stl', 'vplayer'
+    ]);
+
+    function enhancedPlugin() {
+        const je = window.JellyfinEnhanced;
+        return je && je.currentSettings && typeof je.currentSettings === 'object' ? je : null;
+    }
+
+    // Mirrors the plugin's own applySavedStylesWhenReady(): same settings,
+    // same fallbacks, and nothing when its presets are missing. Returns null
+    // when mpv should keep the user's own style.
+    function enhancedSubtitleStyle(subtitleCodec) {
+        const je = enhancedPlugin();
+        if (!je) return null;
+        const s = je.currentSettings;
+        if (s.disableCustomSubtitleStyles) return null;
+        const sizePreset = Array.isArray(je.fontSizePresets)
+            ? je.fontSizePresets[s.selectedFontSizePresetIndex ?? 2] : null;
+        const fontPreset = Array.isArray(je.fontFamilyPresets)
+            ? je.fontFamilyPresets[s.selectedFontFamilyPresetIndex ?? 0] : null;
+        if (!sizePreset || !fontPreset) return null;
+        const effects = Array.isArray(je.subtitleTextEffectPresets) ? je.subtitleTextEffectPresets : [];
+        const effectIdx = s.selectedTextEffectPresetIndex;
+        const effect = (Number.isInteger(effectIdx) && effects[effectIdx]) || null;
+        const isText = TEXT_SUBTITLE_CODECS.has(String(subtitleCodec || '').toLowerCase());
+        const pos = Number(s.subtitleVerticalPosition ?? 95);
+        return {
+            textColor: String(s.customSubtitleTextColor || '#FFFFFFFF'),
+            backColor: String(s.customSubtitleBgColor || '#00000000'),
+            sizeFactor: Number(sizePreset.size),
+            fontFamily: String(fontPreset.family || ''),
+            effect: effect && typeof effect.name === 'string' ? effect.name : 'Auto',
+            // Only plain-text tracks are repositioned, as in jellyfin-web.
+            verticalPosition: isText && Number.isFinite(pos) ? pos : null
+        };
+    }
+
+    function enhancedPauseScreenEnabled() {
+        const je = enhancedPlugin();
+        return !!(je && je.currentSettings.pauseScreenEnabled);
+    }
+
+    // A hidden <video> standing in for mpv, so the plugin's pause screen finds
+    // a player in .videoPlayerContainer and can read and drive it. Reads come
+    // from the player's state; play/pause/seek/rate go to mpv.
+    function createEnhancedVideoProxy(player) {
+        const v = document.createElement('video');
+        v.className = 'rtxEnhancedVideoProxy';
+        v.setAttribute('aria-hidden', 'true');
+        v.tabIndex = -1;
+        v.muted = true;
+        v.preload = 'none';
+        v.style.display = 'none';
+        const define = (name, get, set) => Object.defineProperty(v, name, {
+            configurable: true,
+            get,
+            set: set || (() => {})
+        });
+        define('paused', () => player._paused === true);
+        define('ended', () => player._endedPending === true);
+        define('currentSrc', () => player._currentSrc || '');
+        define('src', () => player._currentSrc || '');
+        define('currentTime', () => (player._currentTime || 0) / 1000, (sec) => {
+            if (Number.isFinite(sec) && sec >= 0 && player._currentSrc) player.currentTime(Math.round(sec * 1000));
+        });
+        define('duration', () => (player._duration > 0 ? player._duration / 1000 : NaN));
+        define('playbackRate', () => player.getPlaybackRate(), (rate) => {
+            if (Number.isFinite(rate) && rate > 0) player.setPlaybackRate(rate);
+        });
+        v.play = () => {
+            if (player._paused && player._currentSrc) player.unpause();
+            return Promise.resolve();
+        };
+        v.pause = () => {
+            if (!player._paused && player._currentSrc) player.pause();
+        };
+        return v;
+    }
+
     class mpvVideoPlayer extends window.MpvPlayerBase {
         constructor(args) {
             super(args);
@@ -328,7 +417,19 @@
             // Support jellyfin-web v10.10.7
             this._currentAspectRatio = undefined;
 
+            this._enhancedStyleKey = undefined;
+            this._enhancedSyncedAt = 0;
+            this._enhancedProxy = null;
+            this._subtitleCodec = null;
+
+            const onPause = this.handlers.onPause;
+            this.handlers.onPause = () => {
+                onPause();
+                this._enhancedProxyEvent('pause');
+            };
+
             this.handlers.onPlaying = () => {
+                const wasPlaying = this._started && !this._paused;
                 if (!this._started) {
                     this._started = true;
                     this.loading.hide();
@@ -346,6 +447,7 @@
                     window.api.player.setVideoRectangle(0, 0, 0, 0);
                 }
                 this._emitPlaying();
+                if (!wasPlaying) this._enhancedProxyEvent('play');
             };
 
             this.handlers.onTimeUpdate = (time) => {
@@ -353,12 +455,14 @@
                 this._seeking = false;
                 this._currentTime = time;
                 this.events.trigger(this, 'timeupdate');
+                this._syncEnhanced(false);
             };
 
             this.handlers.onEnded = () => {
                 if (!this._endedPending) {
                     this._endedPending = true;
                     this.onEndedInternal();
+                    this._enhancedProxyEvent('emptied');
                 }
             };
 
@@ -379,7 +483,9 @@
             if (options.fullscreen) this.loading.show();  // fills entire web content area, not the actual screen
             await this.createMediaElement(options);
             console.debug(`[Media] [${this.logTag}] createMediaElement done, calling setCurrentSrc`);
-            const result = await this.setCurrentSrc(options);
+            const loaded = this.setCurrentSrc(options);
+            this._enhancedProxyEvent('loadstart');
+            const result = await loaded;
 
             // needed when only audio is single external
             const externalAudio = options.mediaSource?.MediaStreams?.find(s => s.Type === 'Audio' && s.IsExternal);
@@ -426,8 +532,10 @@
 
             let subParam = MpvPlayerBase.TRACK_DISABLE;
             let externalSubUrl = null;
+            this._subtitleCodec = null;
             if (defaultSubIdx >= 0) {
                 const subStream = getStreamByIndex(streams, defaultSubIdx);
+                this._subtitleCodec = subStream ? subStream.Codec : null;
                 if (subStream && subStream.DeliveryMethod === 'External' && subStream.DeliveryUrl) {
                     externalSubUrl = subStream.DeliveryUrl;
                 } else {
@@ -441,15 +549,65 @@
 
         _beforeLoad(options) {
             window.api.player.setAspectMode(options?.aspectRatio || this.getAspectRatio());
+            // Style the first subtitle line already, not a second later.
+            this._syncEnhanced(true);
+        }
+
+        // Pushes the plugin's subtitle style to mpv when it changed and adds
+        // or removes the pause-screen stand-in. Cheap when nothing changed;
+        // runs on load, on track changes and at most once a second while
+        // playing, so edits made in the plugin's panel show up live.
+        _syncEnhanced(force) {
+            const now = Date.now();
+            if (!force && now - this._enhancedSyncedAt < ENHANCED_SYNC_INTERVAL_MS) return;
+            this._enhancedSyncedAt = now;
+            try {
+                const key = JSON.stringify(enhancedSubtitleStyle(this._subtitleCodec));
+                if (key !== this._enhancedStyleKey) {
+                    this._enhancedStyleKey = key;
+                    window.api.player.setSubtitleStyle(key);
+                }
+                this._syncEnhancedProxy();
+            } catch (e) {
+                console.warn('[Media] Jellyfin Enhanced bridge:', e);
+            }
+        }
+
+        _syncEnhancedProxy() {
+            const dlg = this._videoDialog;
+            const want = !!dlg && enhancedPauseScreenEnabled();
+            const proxy = this._enhancedProxy;
+            if (want && (!proxy || proxy.parentNode !== dlg)) {
+                if (proxy) proxy.remove();
+                this._enhancedProxy = createEnhancedVideoProxy(this);
+                dlg.appendChild(this._enhancedProxy);
+            } else if (!want && proxy) {
+                proxy.remove();
+                this._enhancedProxy = null;
+            }
+        }
+
+        _enhancedProxyEvent(type) {
+            const proxy = this._enhancedProxy;
+            if (!proxy || !proxy.isConnected) return;
+            try {
+                proxy.dispatchEvent(new Event(type));
+            } catch (e) {
+                console.warn(`[Media] Jellyfin Enhanced bridge: ${type} event failed:`, e);
+            }
         }
 
         setSubtitleStreamIndex(index) {
             if (index == null || index < 0) {
+                this._subtitleCodec = null;
+                this._syncEnhanced(true);
                 window.api.player.setSubtitleStream(MpvPlayerBase.TRACK_DISABLE);
                 return;
             }
             const streams = this._currentPlayOptions?.mediaSource?.MediaStreams || [];
             const stream = getStreamByIndex(streams, index);
+            this._subtitleCodec = stream ? stream.Codec : null;
+            this._syncEnhanced(true);
             if (stream && stream.DeliveryMethod === 'External' && stream.DeliveryUrl) {
                 window.api.player.addSubtitleStream(stream.DeliveryUrl);
                 return;
@@ -532,6 +690,10 @@
             window.api.player.setVideoRectangle(-1, 0, 0, 0);
             document.body.classList.remove('hide-scroll');
             const dlg = this._videoDialog;
+            if (this._enhancedProxy) {
+                this._enhancedProxy.remove();
+                this._enhancedProxy = null;
+            }
             if (dlg) {
                 this.setTransparency(0);
                 this._videoDialog = null;
@@ -586,6 +748,7 @@
             });
             if (isNewDlg) ready.then(() => this.setTransparency(2));
             dlg.appendChild(poster);
+            this._syncEnhancedProxy();
 
             if (options.fullscreen) document.body.classList.add('hide-scroll');  // fills entire web content area, not the actual screen
             return ready;

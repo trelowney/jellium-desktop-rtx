@@ -27,6 +27,7 @@ pub mod color;
 #[cfg(target_os = "windows")]
 pub mod hw_decode;
 pub mod probe;
+pub mod sub_style;
 
 pub use command::Command;
 pub use error::{Error, Result};

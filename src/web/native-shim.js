@@ -310,6 +310,10 @@
                 console.debug('[Media] player.setSubtitleDelay:', ms);
                 if (window.jmpNative) window.jmpNative.playerSetSubtitleDelay(ms / 1000.0);
             },
+            setSubtitleStyle(json) {
+                console.debug('[Media] player.setSubtitleStyle:', json);
+                if (window.jmpNative && window.jmpNative.playerSetSubtitleStyle) window.jmpNative.playerSetSubtitleStyle(json);
+            },
             setAudioDelay(ms) {
                 console.debug('[Media] player.setAudioDelay:', ms);
                 if (window.jmpNative) window.jmpNative.playerSetAudioDelay(ms / 1000.0);
