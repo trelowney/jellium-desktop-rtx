@@ -219,8 +219,9 @@ fn handle_subtitle_style(json: &str) {
             SubtitleStyle {
                 text_color: text("textColor"),
                 back_color: text("backColor"),
-                size_factor: o
-                    .get("sizeFactor")
+                size_vw: o.get("sizeVw").and_then(Value::as_f64).unwrap_or(f64::NAN),
+                viewport_aspect: o
+                    .get("viewportAspect")
                     .and_then(Value::as_f64)
                     .unwrap_or(f64::NAN),
                 font_family: text("fontFamily"),

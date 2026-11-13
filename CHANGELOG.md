@@ -3,6 +3,11 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-11-13.1
+
+### Fixed
+- **Jellyfin Enhanced subtitles are now the same size as in the browser.** The plugin sizes subtitles as a share of the window width, but the app scaled them from mpv's own default size, so they came out roughly twice as large. Each size preset now matches what jellyfin-web shows, and the size follows the window shape when you resize it, as in the browser. Without the plugin, or with its custom subtitle styles turned off, nothing changes.
+
 ## 2026-11-13
 
 ### Added

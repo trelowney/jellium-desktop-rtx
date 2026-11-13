@@ -327,12 +327,21 @@
         return {
             textColor: String(s.customSubtitleTextColor || '#FFFFFFFF'),
             backColor: String(s.customSubtitleBgColor || '#00000000'),
-            sizeFactor: Number(sizePreset.size),
+            // The plugin sizes text in vw (% of the window width); mpv sizes it
+            // relative to the window height, so it needs the window's shape.
+            sizeVw: Number(sizePreset.size),
+            viewportAspect: viewportAspect(),
             fontFamily: String(fontPreset.family || ''),
             effect: effect && typeof effect.name === 'string' ? effect.name : 'Auto',
             // Only plain-text tracks are repositioned, as in jellyfin-web.
             verticalPosition: isText && Number.isFinite(pos) ? pos : null
         };
+    }
+
+    // Window width / height, rounded so resizing by a pixel doesn't resend.
+    function viewportAspect() {
+        const w = window.innerWidth, h = window.innerHeight;
+        return w > 0 && h > 0 ? Math.round((w / h) * 100) / 100 : null;
     }
 
     function enhancedPauseScreenEnabled() {
@@ -421,6 +430,11 @@
             this._enhancedSyncedAt = 0;
             this._enhancedProxy = null;
             this._subtitleCodec = null;
+            // Subtitle size follows the window shape, so resend on resize
+            // (also while paused, when no time updates arrive).
+            window.addEventListener('resize', () => {
+                if (this._videoDialog) this._syncEnhanced(true);
+            });
 
             const onPause = this.handlers.onPause;
             this.handlers.onPause = () => {

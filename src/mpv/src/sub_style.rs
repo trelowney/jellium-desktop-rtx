@@ -32,10 +32,19 @@ pub const STYLE_PROPERTIES: &[&str] = &[
     "sub-pos",
 ];
 
-/// mpv's built-in `sub-font-size`, used when the snapshot cannot be parsed.
-const DEFAULT_FONT_SIZE: f64 = 38.0;
-/// Jellyfin Enhanced's "Normal" size preset; it maps to the baseline size.
-const NORMAL_SIZE_FACTOR: f64 = 1.2;
+/// Jellyfin Enhanced's "Normal" size preset (1.2vw), the fallback for an
+/// unusable size.
+const NORMAL_SIZE_VW: f64 = 1.2;
+/// Window aspect assumed when the web layer could not measure it.
+const DEFAULT_ASPECT: f64 = 16.0 / 9.0;
+/// mpv's `sub-font-size` is in pixels of a window scaled to 720 rows high.
+const MPV_SCALED_HEIGHT: f64 = 720.0;
+/// libass treats the font size as the font's full ascender-to-descender
+/// height, which is larger than the CSS em the browser sizes by. Typical
+/// subtitle fonts (Arial 1.12, DejaVu Sans 1.16, Segoe UI 1.33) sit around
+/// this; measured on DejaVu Sans, a size of 100 gives the 63 px cap height
+/// that an 86 px CSS font has.
+const EM_TO_LIBASS_SIZE: f64 = 1.15;
 /// Jellyfin Enhanced anchors the subtitle bottom edge at a percentage of the
 /// video height (default 95). mpv's `sub-pos` 100 leaves a bottom margin of
 /// about 5 % (`sub-margin-y` 34 at 720), so the plugin's default lands on
@@ -72,8 +81,11 @@ pub struct SubtitleStyle {
     pub text_color: String,
     /// `#RRGGBB`, `#RRGGBBAA` or `transparent`.
     pub back_color: String,
-    /// Size preset factor (Jellyfin Enhanced's "Normal" is 1.2).
-    pub size_factor: f64,
+    /// Font size in CSS `vw` (% of the window width), as the plugin sets it;
+    /// its "Normal" preset is 1.2.
+    pub size_vw: f64,
+    /// Window width / height, to turn `vw` into mpv's height-relative size.
+    pub viewport_aspect: f64,
     /// CSS font-family list; empty or `inherit` keeps the baseline font.
     pub font_family: String,
     pub effect: TextEffect,
@@ -161,20 +173,27 @@ fn first_font_family(family: &str) -> Option<String> {
     }
 }
 
-/// mpv property assignments for `style`, given the baseline `sub-font-size`.
-/// Pure so it can be unit-tested; [`apply`] does the I/O.
-pub fn properties(style: &SubtitleStyle, baseline_font_size: f64) -> Vec<(&'static str, String)> {
-    let base = if baseline_font_size.is_finite() && baseline_font_size > 0.0 {
-        baseline_font_size
+/// mpv `sub-font-size` that renders as large as `vw` does in the browser in a
+/// window of the given width / height.
+fn font_size(vw: f64, aspect: f64) -> f64 {
+    let vw = if vw.is_finite() && vw > 0.0 {
+        vw
     } else {
-        DEFAULT_FONT_SIZE
+        NORMAL_SIZE_VW
     };
-    let factor = if style.size_factor.is_finite() && style.size_factor > 0.0 {
-        style.size_factor
+    let aspect = if aspect.is_finite() && aspect > 0.0 {
+        aspect
     } else {
-        NORMAL_SIZE_FACTOR
+        DEFAULT_ASPECT
     };
-    let size = base * factor / NORMAL_SIZE_FACTOR;
+    // vw of the width = vw * aspect % of the height.
+    vw / 100.0 * aspect * MPV_SCALED_HEIGHT * EM_TO_LIBASS_SIZE
+}
+
+/// mpv property assignments for `style`. Pure so it can be unit-tested;
+/// [`apply`] does the I/O.
+pub fn properties(style: &SubtitleStyle) -> Vec<(&'static str, String)> {
+    let size = font_size(style.size_vw, style.viewport_aspect);
 
     let text = Rgba::parse(&style.text_color).unwrap_or(Rgba {
         r: 1.0,
@@ -272,12 +291,7 @@ pub fn apply(style: &SubtitleStyle) {
         }
         *baseline = Some(snapshot);
     }
-    let base_size = baseline
-        .as_ref()
-        .and_then(|b| b.iter().find(|(n, _)| *n == "sub-font-size"))
-        .and_then(|(_, v)| v.trim().parse::<f64>().ok())
-        .unwrap_or(DEFAULT_FONT_SIZE);
-    let props = properties(style, base_size);
+    let props = properties(style);
     // Properties the style leaves out (font, position) go back to baseline,
     // so switching e.g. to a bitmap track drops a previous position override.
     if let Some(b) = baseline.as_ref() {
@@ -310,7 +324,8 @@ mod tests {
         SubtitleStyle {
             text_color: "#FFFFFFFF".into(),
             back_color: "#00000000".into(),
-            size_factor: 1.2,
+            size_vw: 1.2,
+            viewport_aspect: 16.0 / 9.0,
             font_family: "inherit".into(),
             effect: TextEffect::Auto,
             vertical_position: Some(95.0),
@@ -348,13 +363,14 @@ mod tests {
     }
 
     #[test]
-    fn default_style_matches_mpv_defaults_where_it_can() {
-        let p = properties(&style(), 38.0);
-        assert_eq!(get(&p, "sub-font-size"), Some("38"));
+    fn default_style() {
+        let p = properties(&style());
+        // 1.2vw in a 16:9 window: 2.13 % of the height, 17.664 at 720.
+        assert_eq!(get(&p, "sub-font-size"), Some("17.664"));
         assert_eq!(get(&p, "sub-pos"), Some("100"));
         assert_eq!(get(&p, "sub-border-style"), Some("outline-and-shadow"));
         // Auto on a transparent background is the soft shadow.
-        assert_eq!(get(&p, "sub-outline-size"), Some("1.9"));
+        assert_eq!(get(&p, "sub-outline-size"), Some("0.883"));
         assert_eq!(get(&p, "sub-blur"), Some("1.5"));
         assert_eq!(get(&p, "sub-shadow-offset"), Some("0"));
         assert_eq!(get(&p, "sub-font"), None);
@@ -364,48 +380,50 @@ mod tests {
     fn background_uses_a_box() {
         let s = SubtitleStyle {
             back_color: "#0000007B".into(),
-            size_factor: 1.8,
+            size_vw: 1.8,
             ..style()
         };
-        let p = properties(&s, 38.0);
+        let p = properties(&s);
         assert_eq!(get(&p, "sub-border-style"), Some("background-box"));
         assert_eq!(get(&p, "sub-back-color"), Some("0/0/0/0.482"));
-        assert_eq!(get(&p, "sub-font-size"), Some("57"));
-        assert_eq!(get(&p, "sub-shadow-offset"), Some("11.4"));
+        assert_eq!(get(&p, "sub-font-size"), Some("26.496"));
+        assert_eq!(get(&p, "sub-shadow-offset"), Some("5.299"));
         // Auto on a solid background draws no outline.
         assert_eq!(get(&p, "sub-outline-size"), Some("0"));
     }
 
     #[test]
-    fn size_follows_the_users_own_baseline() {
-        let s = SubtitleStyle {
-            size_factor: 2.4,
-            ..style()
+    fn size_follows_the_window_shape_like_vw() {
+        let size = |vw, aspect| {
+            let s = SubtitleStyle {
+                size_vw: vw,
+                viewport_aspect: aspect,
+                ..style()
+            };
+            get(&properties(&s), "sub-font-size").map(str::to_owned)
         };
-        assert_eq!(get(&properties(&s, 50.0), "sub-font-size"), Some("100"));
-        // Garbage baseline or factor falls back instead of producing NaN.
-        assert_eq!(
-            get(&properties(&style(), f64::NAN), "sub-font-size"),
-            Some("38")
-        );
-        let bad = SubtitleStyle {
-            size_factor: -1.0,
-            ..style()
-        };
-        assert_eq!(get(&properties(&bad, 38.0), "sub-font-size"), Some("38"));
+        // Wider window, same height: vw text grows with the width.
+        assert_eq!(size(1.2, 21.0 / 9.0).as_deref(), Some("23.184"));
+        assert_eq!(size(1.2, 4.0 / 3.0).as_deref(), Some("13.248"));
+        assert_eq!(size(2.4, 16.0 / 9.0).as_deref(), Some("35.328"));
+        // Unusable inputs fall back to Normal in 16:9 instead of NaN.
+        assert_eq!(size(f64::NAN, 16.0 / 9.0).as_deref(), Some("17.664"));
+        assert_eq!(size(-1.0, 16.0 / 9.0).as_deref(), Some("17.664"));
+        assert_eq!(size(1.2, f64::NAN).as_deref(), Some("17.664"));
+        assert_eq!(size(1.2, 0.0).as_deref(), Some("17.664"));
     }
 
     #[test]
     fn effects() {
-        let with = |effect| properties(&SubtitleStyle { effect, ..style() }, 38.0);
+        let with = |effect| properties(&SubtitleStyle { effect, ..style() });
         assert_eq!(get(&with(TextEffect::None), "sub-outline-size"), Some("0"));
         assert_eq!(
             get(&with(TextEffect::Outline), "sub-outline-size"),
-            Some("3.04")
+            Some("1.413")
         );
         assert_eq!(get(&with(TextEffect::Outline), "sub-blur"), Some("0"));
         let os = with(TextEffect::OutlineShadow);
-        assert_eq!(get(&os, "sub-shadow-offset"), Some("4.56"));
+        assert_eq!(get(&os, "sub-shadow-offset"), Some("2.12"));
         assert_eq!(get(&os, "sub-back-color"), Some("0/0/0/0.85"));
         assert_eq!(
             TextEffect::from_name("Outline + Shadow"),
@@ -421,19 +439,19 @@ mod tests {
             vertical_position: Some(85.0),
             ..style()
         };
-        let p = properties(&s, 38.0);
+        let p = properties(&s);
         assert_eq!(get(&p, "sub-font"), Some("Courier New"));
         assert_eq!(get(&p, "sub-pos"), Some("90"));
         let off = SubtitleStyle {
             vertical_position: None,
             ..style()
         };
-        assert_eq!(get(&properties(&off, 38.0), "sub-pos"), None);
+        assert_eq!(get(&properties(&off), "sub-pos"), None);
         let high = SubtitleStyle {
             vertical_position: Some(140.0),
             ..style()
         };
-        assert_eq!(get(&properties(&high, 38.0), "sub-pos"), Some("100"));
+        assert_eq!(get(&properties(&high), "sub-pos"), Some("100"));
     }
 
     #[test]
@@ -452,7 +470,7 @@ mod tests {
                     font_family: "Arial".into(),
                     ..style()
                 };
-                for (name, _) in properties(&s, 38.0) {
+                for (name, _) in properties(&s) {
                     assert!(STYLE_PROPERTIES.contains(&name), "{name}");
                 }
             }
