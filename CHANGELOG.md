@@ -3,6 +3,18 @@
 All notable changes to this RTX fork. Newest first. Each release's notes are
 published from the matching section below.
 
+## 2026-11-15
+
+### Changed
+- **Based on the latest upstream jellium-desktop (`09de0a6`).** What it brings on Windows:
+  - **Dolby Vision on Dolby Vision TVs.** With RTX off, Dolby Vision files are handed to Windows so a Dolby Vision display can show them as real Dolby Vision, and the picture switches back properly after such a file.
+  - **The hardware decoding choice in Settings is kept.** A saved mode was dropped when the app started, so playback fell back to the default.
+  - **Mono audio plays on both speakers.**
+  - Overlays such as Settings also hide on graphics cards that lack the newer DirectComposition interface.
+
+### Fixed
+- **Dolby Vision keeps HDR with RTX on.** Upstream's new Dolby Vision handling turns the HDR output off for Dolby Vision files and leaves the picture to Windows. With RTX Video Super Resolution or HDR enabled, the RTX filter drops the Dolby Vision data, so profile 7 and 8 files would have lost HDR. While RTX is on, these files now play as HDR10, as before. Profile 5 files are still transcoded by the server.
+
 ## 2026-11-13.1
 
 ### Fixed
