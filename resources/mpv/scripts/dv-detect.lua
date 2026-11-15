@@ -104,7 +104,22 @@ local PROFILES = {
 -- (before track selection happens), so "selected" can't be used to narrow
 -- this — any video track carrying Dolby Vision metadata is enough to
 -- classify the whole file as Dolby Vision.
+--
+-- RTX fork: while the RTX Video filter (d3d11vpp) is in the chain, the
+-- Dolby Vision profile is never used. d3d11vpp drops the DV metadata and
+-- emits the HDR10 base layer, so DWM has no DV left to process, and the
+-- DV profile's target-colorspace-hint=no would only throw away the HDR
+-- output (and RTX Video HDR) for that file. Profile 5 files never get here
+-- as DV: the client asks the server to transcode them.
+local function rtx_filter_active()
+    local vf = mp.get_property("vf", "")
+    return vf:find("d3d11vpp", 1, true) ~= nil
+end
+
 local function classify(tracks)
+    if rtx_filter_active() then
+        return "default"
+    end
     for _, track in ipairs(tracks) do
         if track.type == "video" and track["dolby-vision-profile"] then
             return "dolby_vision"

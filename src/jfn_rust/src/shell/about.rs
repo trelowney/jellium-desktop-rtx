@@ -53,7 +53,8 @@ impl About {
                 button(text(CHECK_FOR_UPDATES_LABEL)).on_press(Message::CheckForUpdates),
                 Message::CheckForUpdates,
             ))
-            .padding(Padding::from([8, 0])),
+            .padding(Padding::from([8, 0]))
+            .boxed(),
         );
 
         about_layout(
